@@ -1,0 +1,33 @@
+name: Refresh SAT 69/69-B
+
+# Cron externo que dispara la ingesta en el servicio de Render (mismo patrón
+# que el MCP de movilizaciones). El servidor descarga los CSV del SAT, actualiza
+# SQLite y hace push a Turso. Idempotente por hash (usa ?force=true para forzar).
+
+on:
+  schedule:
+    - cron: "30 11 * * *"   # 05:30 America/Mexico_City ≈ 11:30 UTC
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Forzar reproceso aunque el hash no cambie"
+        type: boolean
+        default: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /refresh
+        env:
+          BASE_URL: ${{ secrets.RENDER_BASE_URL }}   # https://sat69-mcp.onrender.com
+          MCP_API_KEY: ${{ secrets.MCP_API_KEY }}
+          FORCE: ${{ github.event.inputs.force }}
+        run: |
+          url="$BASE_URL/refresh"
+          if [ "$FORCE" = "true" ]; then url="$url?force=true"; fi
+          echo "POST $url"
+          code=$(curl -sS -o /tmp/out.json -w "%{http_code}" -X POST "$url" \
+            -H "Authorization: Bearer $MCP_API_KEY")
+          echo "HTTP $code"; cat /tmp/out.json
+          [ "$code" = "200" ] || exit 1
