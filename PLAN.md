@@ -10,4 +10,4 @@ SQLite+FTS5, Turso, deploy en Render.
 - [x] **3. Transportes** — stdio (server.py) + HTTP (web.py) con OAuth/bearer.
 - [x] **4. Tests** — test_pipeline, test_risk (13 passing).
 - [x] **5. Repo + Docker** — git init, Dockerfile, compose.yaml, GitHub.
-- [ ] **6. Deploy Render** — verificar deploy verde + cron (GitHub Actions).
+- [x] **6. Deploy Render** — servicio `sat69-mcp` (srv-d979ikcvikkc73dt8cdg), /health verde, Turso durable, cron en Actions.
