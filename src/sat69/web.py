@@ -155,7 +155,10 @@ def create_app() -> Starlette:
 
 def main() -> None:
     app = create_app()
-    _run_startup()
+    # El pull de Turso (½M filas, ~5 min) corre en segundo plano para que uvicorn
+    # abra el puerto de inmediato; si no, Render no detecta el puerto y reinicia
+    # la instancia en bucle. /health reporta no_data hasta que termina el pull.
+    threading.Thread(target=_run_startup, name="startup", daemon=True).start()
     uvicorn.run(
         app, host=settings.host, port=settings.port,
         log_level=settings.log_level.lower(), timeout_graceful_shutdown=10,
