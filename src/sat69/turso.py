@@ -57,6 +57,7 @@ _SCHEMA_STMTS = [
 ]
 
 _PUSH_CHUNK = 2000
+_PULL_CHUNK = 5000  # ponytail: pull por lotes; 512Mi de Render no aguanta ½M dicts de golpe
 
 
 def _normalize_url(url: str) -> str:
@@ -82,45 +83,49 @@ def _client():
         return None
 
 
-def _rows(result) -> list[dict]:
-    cols = result.columns
-    return [dict(zip(cols, row)) for row in result.rows]
-
-
 def pull_from_turso() -> int:
-    """Turso → local (reemplazo completo). Devuelve total de filas importadas."""
+    """Turso → local (reemplazo completo, por lotes). Devuelve filas importadas.
+
+    Lee cada tabla en páginas de _PULL_CHUNK e inserta sobre la marcha, para no
+    materializar ½M de filas en memoria (el free tier de Render son 512Mi).
+    """
     client = _client()
     if client is None:
         logger.info("Turso no configurado — se omite pull")
         return 0
+
+    from . import database as db
+
+    total = 0
     try:
         for stmt in _SCHEMA_STMTS:
             client.execute(stmt)
-        data = {t: _rows(client.execute(f"SELECT * FROM {t}")) for t in _TABLES}
+
+        for table, cols in _TABLES.items():
+            n = client.execute(f"SELECT count(*) FROM {table}").rows[0][0]
+            with db.get_conn() as conn:
+                conn.execute(f"DELETE FROM {table}")
+            if not n:
+                continue
+            col_list = ", ".join(cols)
+            insert = f"INSERT INTO {table} ({col_list}) VALUES ({', '.join('?' for _ in cols)})"
+            for offset in range(0, n, _PULL_CHUNK):
+                res = client.execute(
+                    f"SELECT {col_list} FROM {table} LIMIT {_PULL_CHUNK} OFFSET {offset}"
+                )
+                with db.get_conn() as conn:
+                    conn.executemany(insert, [list(row) for row in res.rows])
+                total += len(res.rows)
     except Exception as exc:  # noqa: BLE001
-        logger.error("pull_from_turso (lectura) falló: %s", exc)
-        return 0
+        logger.error("pull_from_turso falló: %s", exc)
+        return total
     finally:
         client.close()
 
-    total = sum(len(v) for v in data.values())
     if total == 0:
         logger.info("Turso vacío — nada que importar")
-        return 0
-
-    from . import database as db
-    with db.get_conn() as conn:
-        for table, cols in _TABLES.items():
-            conn.execute(f"DELETE FROM {table}")
-            rows = data[table]
-            if not rows:
-                continue
-            placeholders = ", ".join("?" for _ in cols)
-            conn.executemany(
-                f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})",
-                [[r.get(c) for c in cols] for r in rows],
-            )
-    logger.info("Importadas %d filas de Turso", total)
+    else:
+        logger.info("Importadas %d filas de Turso", total)
     return total
 
 
