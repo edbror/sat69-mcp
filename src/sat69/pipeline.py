@@ -15,7 +15,7 @@ import csv
 import io
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from . import database as db
 from .config import settings
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _fecha(v: str | None) -> str | None:
@@ -181,3 +181,25 @@ def process_import(dataset: str = "all", force_refresh: bool = False) -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.exception("process_import falló")
         return {"success": False, "error": str(exc)}
+
+
+def main() -> int:
+    """CLI: `python -m sat69.pipeline [--force]` — ingesta completa + push a Turso.
+
+    Pensado para el cron de GitHub Actions (runner fiable, sin spin-down del free
+    tier de Render). Render sólo hace pull en el arranque.
+    """
+    import pathlib
+    import sys
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s — %(message)s")
+    db.init_db(pathlib.Path(settings.db_path))
+    result = process_import("all", force_refresh="--force" in sys.argv)
+    logger.info(
+        "Resultado: %s (push Turso: %s)", result.get("message"), result.get("turso_rows_pushed")
+    )
+    return 0 if result.get("success") else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

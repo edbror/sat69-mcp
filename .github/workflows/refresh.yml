@@ -1,8 +1,8 @@
 name: Refresh SAT 69/69-B
 
-# Cron externo que dispara la ingesta en el servicio de Render (mismo patrón
-# que el MCP de movilizaciones). El servidor descarga los CSV del SAT, actualiza
-# SQLite y hace push a Turso. Idempotente por hash (usa ?force=true para forzar).
+# La ingesta corre en el runner de GitHub (fiable, sin spin-down del free tier),
+# descarga los CSV del SAT y hace push directo a Turso. Render sólo hace pull al
+# arrancar (FETCH_ON_STARTUP=false). Idempotente por hash (--force para forzar).
 
 on:
   schedule:
@@ -18,16 +18,14 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
-      - name: POST /refresh
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install .
+      - name: Ingesta + push a Turso
         env:
-          BASE_URL: ${{ secrets.RENDER_BASE_URL }}   # https://sat69-mcp.onrender.com
-          MCP_API_KEY: ${{ secrets.MCP_API_KEY }}
-          FORCE: ${{ github.event.inputs.force }}
-        run: |
-          url="$BASE_URL/refresh"
-          if [ "$FORCE" = "true" ]; then url="$url?force=true"; fi
-          echo "POST $url"
-          code=$(curl -sS -o /tmp/out.json -w "%{http_code}" -X POST "$url" \
-            -H "Authorization: Bearer $MCP_API_KEY")
-          echo "HTTP $code"; cat /tmp/out.json
-          [ "$code" = "200" ] || exit 1
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          DB_PATH: /tmp/sat69.db
+        run: python -m sat69.pipeline ${{ github.event.inputs.force == 'true' && '--force' || '' }}
