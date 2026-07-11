@@ -124,6 +124,22 @@ async def _refresh(request: Request) -> JSONResponse:
     return JSONResponse(result, status_code=200 if result.get("success") else 502)
 
 
+async def _oauth_protected_resource_root(request: Request) -> JSONResponse:
+    """Metadata OAuth (RFC 9728) servida en la RAÍZ.
+
+    FastMCP ≥3.4.x sólo la registra con sufijo (/.well-known/oauth-protected-resource/mcp),
+    pero algunos clientes (el connector del Claude app) la buscan en la raíz —
+    igual que la sirve el MCP de SSC. Sin esto, el discovery OAuth da 404 y el
+    connector falla con "authorization failed".
+    """
+    return JSONResponse({
+        "resource": f"{settings.base_url}/mcp",
+        "authorization_servers": [settings.authkit_domain],
+        "scopes_supported": [],
+        "bearer_methods_supported": ["header"],
+    })
+
+
 async def _reload(request: Request) -> JSONResponse:
     from starlette.concurrency import run_in_threadpool
 
@@ -141,13 +157,19 @@ async def _reload(request: Request) -> JSONResponse:
 def create_app() -> Starlette:
     from .server import mcp  # importar configura la DB
     mcp_app = mcp.http_app(path="/mcp", transport="http")
+    routes = [
+        Route("/health", _health, methods=["GET"]),
+        Route("/refresh", _refresh, methods=["POST"]),
+        Route("/reload", _reload, methods=["POST"]),
+    ]
+    if settings.oauth_enabled:
+        routes.append(Route(
+            "/.well-known/oauth-protected-resource",
+            _oauth_protected_resource_root, methods=["GET"],
+        ))
+    routes.append(Mount("/", app=mcp_app))
     return Starlette(
-        routes=[
-            Route("/health", _health, methods=["GET"]),
-            Route("/refresh", _refresh, methods=["POST"]),
-            Route("/reload", _reload, methods=["POST"]),
-            Mount("/", app=mcp_app),
-        ],
+        routes=routes,
         middleware=[Middleware(BearerAuthMiddleware)],
         lifespan=mcp_app.lifespan,
     )
