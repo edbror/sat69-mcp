@@ -35,12 +35,21 @@ def _build_auth():
     """
     if not settings.oauth_enabled:
         return None
-    from fastmcp.server.auth.providers.workos import AuthKitProvider
+    from fastmcp.server.auth.providers.workos import (
+        AuthKitProvider,
+        WorkOSTokenVerifier,
+    )
 
     logger.info("OAuth habilitado vía AuthKit (%s)", settings.authkit_domain)
+    # Los access tokens de AuthKit (DCR) traen aud = client_id, NO la resource
+    # URL del MCP; el JWTVerifier por defecto los rechaza por audience mismatch.
+    # WorkOSTokenVerifier valida vía el userinfo de AuthKit (sin chequeo de aud),
+    # igual que el MCP de SSC — así no hace falta registrar resource indicators
+    # en WorkOS (que rompen otros MCP del mismo entorno).
     return AuthKitProvider(
         authkit_domain=settings.authkit_domain,
         base_url=settings.base_url,
+        token_verifier=WorkOSTokenVerifier(authkit_domain=settings.authkit_domain),
     )
 
 
