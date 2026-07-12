@@ -27,6 +27,9 @@ from .config import settings
 
 logger = logging.getLogger(__name__)
 
+# Ruta del endpoint MCP. "/connect", igual que el MCP de SSC.
+MCP_PATH = "/connect"
+
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
     """Bearer estático (MCP_API_KEY) selectivo por ruta.
@@ -133,7 +136,7 @@ async def _oauth_protected_resource_root(request: Request) -> JSONResponse:
     connector falla con "authorization failed".
     """
     return JSONResponse({
-        "resource": f"{settings.base_url}/mcp",
+        "resource": f"{settings.base_url}{MCP_PATH}",
         "authorization_servers": [settings.authkit_domain],
         "scopes_supported": [],
         "bearer_methods_supported": ["header"],
@@ -156,7 +159,7 @@ async def _reload(request: Request) -> JSONResponse:
 
 def create_app() -> Starlette:
     from .server import mcp  # importar configura la DB
-    mcp_app = mcp.http_app(path="/mcp", transport="http")
+    mcp_app = mcp.http_app(path=MCP_PATH, transport="http")
     routes = [
         Route("/health", _health, methods=["GET"]),
         Route("/refresh", _refresh, methods=["POST"]),
