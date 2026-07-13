@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SAT 69 / 69-B — Verifica proveedores contra las listas del SAT · WATR</title>
+<meta name="description" content="Servidor MCP que verifica cualquier RFC contra las listas negras del SAT (Art. 69-B EFOS y Art. 69). Tu agente recibe un veredicto de riesgo, con las fechas de publicación en el DOF. Sin OCR, determinista, auditable.">
+<meta property="og:title" content="SAT 69 / 69-B — El checador de listas del SAT para tu agente">
+<meta property="og:description" content="Un RFC entra, un veredicto de riesgo sale: CRÍTICO…LIMPIO. Conéctalo a Claude, ChatGPT o tu app en un minuto.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://sat69.watr.mx">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='4' fill='%230E1B2C'/%3E%3Cpath d='M16 5 L26 9 V16 C26 22 21 26 16 27 C11 26 6 22 6 16 V9 Z' fill='none' stroke='%232E9E6B' stroke-width='2'/%3E%3Cpath d='M11 16 l3.5 3.5 L21 12' fill='none' stroke='%23E8EDF2' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --tinta:#0E1B2C; --tinta-2:#152840;
+    --papel:#F2F4F6; --texto:#22303F; --texto-suave:#5A6B7D;
+    --claro:#E8EDF2; --claro-suave:#9FB0C1;
+    --verde:#2E9E6B; --verde-osc:#1F7A50;
+    --rojo:#C0564D; --ambar:#C98A2B;
+    --linea:#C9D2DC; --linea-osc:#27405E;
+    --mono:'IBM Plex Mono',ui-monospace,monospace;
+    --sans:'Archivo',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto} *{animation:none!important;transition:none!important}}
+  body{font-family:var(--sans);color:var(--texto);background:var(--papel);line-height:1.6;font-size:17px}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  section{padding:88px 0}
+  .eyebrow{font-family:var(--mono);font-size:12.5px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--verde);margin-bottom:18px}
+  h1,h2{font-weight:900;letter-spacing:-.02em;line-height:1.08}
+  h2{font-size:clamp(28px,4vw,40px);margin-bottom:16px}
+  .sub{color:var(--texto-suave);max-width:640px;font-size:18px}
+  a.cta{display:inline-block;font-family:var(--mono);font-weight:600;font-size:15px;text-decoration:none;
+    background:var(--verde);color:#fff;padding:15px 28px;border-radius:3px;letter-spacing:.02em;
+    transition:background .15s ease, transform .15s ease}
+  a.cta:hover{background:var(--verde-osc);transform:translateY(-1px)}
+  a.cta:focus-visible,a:focus-visible{outline:3px solid var(--verde);outline-offset:3px}
+  a.cta.fantasma{background:transparent;color:var(--claro);border:1px solid var(--linea-osc)}
+  a.cta.fantasma:hover{border-color:var(--claro-suave);background:var(--tinta-2)}
+
+  /* hero */
+  header.hero{background:var(--tinta);color:var(--claro)}
+  .hero .wrap{padding-top:88px;padding-bottom:96px;display:grid;grid-template-columns:1.15fr .85fr;gap:56px;align-items:center}
+  .marca{font-family:var(--mono);font-weight:600;font-size:14px;letter-spacing:.18em;color:var(--claro-suave);margin-bottom:56px}
+  .marca b{color:var(--claro)}
+  .hero h1{font-size:clamp(36px,5.4vw,60px);max-width:14ch;color:#fff}
+  .hero h1 em{font-style:normal;color:var(--verde)}
+  .hero p{margin:24px 0 34px;max-width:48ch;color:var(--claro-suave);font-size:19px}
+  .hero p b{color:var(--claro);font-weight:500}
+  .acciones{display:flex;gap:14px;flex-wrap:wrap}
+
+  /* firma: tarjeta de veredicto */
+  .verdicto{background:#0A1420;border:1px solid var(--linea-osc);border-radius:8px;overflow:hidden;
+    font-family:var(--mono);box-shadow:0 30px 70px -34px rgba(0,0,0,.6)}
+  .verdicto .barra{display:flex;gap:8px;align-items:center;background:var(--tinta-2);padding:12px 16px;
+    color:var(--claro-suave);font-size:12px;border-bottom:1px solid var(--linea-osc);letter-spacing:.1em}
+  .verdicto .barra .punto{width:9px;height:9px;border-radius:50%;background:var(--linea-osc)}
+  .verdicto .cuerpo{padding:22px 22px 24px}
+  .verdicto .campo{font-size:12.5px;color:var(--claro-suave);letter-spacing:.06em}
+  .verdicto .rfc{font-size:20px;color:#fff;font-weight:600;margin:2px 0 20px;letter-spacing:.04em}
+  .verdicto .chip{display:inline-flex;align-items:center;gap:9px;font-size:22px;font-weight:600;color:#fff;
+    background:rgba(192,86,77,.16);border:1px solid rgba(192,86,77,.5);border-radius:5px;padding:9px 16px}
+  .verdicto .chip .luz{width:11px;height:11px;border-radius:50%;background:var(--rojo);box-shadow:0 0 0 4px rgba(192,86,77,.25)}
+  .verdicto .glosa{color:var(--claro-suave);font-size:14px;line-height:1.6;margin-top:16px}
+  .verdicto .glosa b{color:var(--claro);font-weight:500}
+  .verdicto .meta{margin-top:16px;padding-top:14px;border-top:1px solid var(--linea-osc);
+    display:flex;justify-content:space-between;font-size:12px;color:var(--claro-suave)}
+
+  /* riesgos */
+  .riesgos{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:40px}
+  .r{border:1px solid var(--linea);border-radius:6px;padding:18px 18px 16px;background:#fff}
+  .r .nivel{font-family:var(--mono);font-weight:600;font-size:14px;display:flex;align-items:center;gap:8px}
+  .r .luz{width:9px;height:9px;border-radius:50%}
+  .r p{font-size:14.5px;color:var(--texto-suave);margin-top:7px}
+  .r.crit .nivel{color:#B0433A}.r.crit .luz{background:#C0564D}
+  .r.alto .nivel{color:#A9741F}.r.alto .luz{background:#C98A2B}
+  .r.medio .nivel{color:#5A6B7D}.r.medio .luz{background:#7C8DA0}
+  .r.limpio .nivel{color:var(--verde-osc)}.r.limpio .luz{background:var(--verde)}
+
+  /* tools */
+  .tools{display:grid;grid-template-columns:repeat(2,1fr);gap:0;margin-top:44px;border-top:1px solid var(--linea)}
+  .tool{padding:26px 30px 26px 0;border-bottom:1px solid var(--linea)}
+  .tool:nth-child(odd){padding-right:40px}
+  .tool:nth-child(even){padding-left:40px;border-left:1px solid var(--linea)}
+  .tool code{font-family:var(--mono);font-size:15px;font-weight:600;color:var(--tinta)}
+  .tool p{color:var(--texto-suave);font-size:15.5px;margin-top:6px}
+
+  /* conectar */
+  #conectar{background:var(--tinta);color:var(--claro)}
+  #conectar .eyebrow{color:var(--verde)}
+  #conectar h2{color:#fff}
+  #conectar .sub{color:var(--claro-suave)}
+  .url{font-family:var(--mono);font-size:clamp(14px,2vw,17px);background:#0A1420;border:1px solid var(--linea-osc);
+    border-radius:6px;padding:18px 20px;margin:26px 0 12px;color:#fff;word-break:break-all;display:flex;
+    justify-content:space-between;gap:16px;align-items:center}
+  .url .lbl{color:var(--verde);font-size:11px;letter-spacing:.14em;display:block;margin-bottom:6px}
+  .pasos-c{display:grid;grid-template-columns:repeat(3,1fr);gap:26px;margin-top:40px}
+  .pc .n{font-family:var(--mono);color:var(--verde);font-size:13px;font-weight:600}
+  .pc h3{font-size:17px;margin:8px 0 6px;color:var(--claro)}
+  .pc p{color:var(--claro-suave);font-size:15px}
+  .pc code{font-family:var(--mono);color:#fff;font-size:13.5px}
+
+  /* datos */
+  .datos{display:flex;gap:48px;flex-wrap:wrap;margin-top:36px}
+  .dato .big{font-family:var(--mono);font-size:34px;font-weight:600;color:var(--tinta);letter-spacing:-.01em}
+  .dato .lbl{font-size:14px;color:var(--texto-suave);margin-top:2px}
+
+  footer{background:var(--tinta);color:var(--claro-suave);border-top:1px solid var(--linea-osc);font-size:14px}
+  footer .wrap{padding:44px 24px;display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap}
+  footer b{color:var(--claro);font-weight:600;font-family:var(--mono);letter-spacing:.1em}
+  footer .aviso{max-width:52ch;line-height:1.55}
+
+  @media (max-width:820px){
+    .hero .wrap{grid-template-columns:1fr;gap:40px;padding-top:64px;padding-bottom:72px}
+    .marca{margin-bottom:36px}
+    .riesgos{grid-template-columns:1fr}
+    .tools{grid-template-columns:1fr}
+    .tool,.tool:nth-child(odd),.tool:nth-child(even){padding:22px 0;border-left:none}
+    .pasos-c{grid-template-columns:1fr;gap:22px}
+    section{padding:64px 0}
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div>
+      <div class="marca">WATR · <b>MCP SUITE</b></div>
+      <h1>La lista negra del SAT, <em>lista para tu agente</em>.</h1>
+      <p>Un RFC entra. Sale un <b>veredicto de riesgo</b> contra el Art. 69-B (EFOS) y el Art. 69 del CFF — con las fechas de publicación en el DOF. Sin OCR, determinista, auditable.</p>
+      <div class="acciones">
+        <a class="cta" href="#conectar">Conectar tu agente</a>
+        <a class="cta fantasma" href="#tools">Ver las herramientas</a>
+      </div>
+    </div>
+    <div class="verdicto" role="img" aria-label="Ejemplo de veredicto: RFC AAS061004AH8, riesgo CRÍTICO, EFOS Definitivo">
+      <div class="barra"><span class="punto"></span><span class="punto"></span><span class="punto"></span>&nbsp; verificar_rfc</div>
+      <div class="cuerpo">
+        <div class="campo">RFC</div>
+        <div class="rfc">AAS061004AH8</div>
+        <div class="chip"><span class="luz"></span> CRÍTICO</div>
+        <div class="glosa"><b>EFOS Definitivo (Art. 69-B).</b> Operaciones simuladas confirmadas por el SAT; los CFDI emitidos no producen efectos fiscales.</div>
+        <div class="meta"><span>DOF definitivo · 13 nov 2018</span><span>en_69b: true</span></div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <div class="eyebrow">El veredicto</div>
+    <h2>Seis niveles, una respuesta clara.</h2>
+    <p class="sub">El 69-B manda sobre el 69: si un RFC aparece en ambos, gana la severidad del 69-B. Tu agente recibe el nivel, el motivo y los registros de respaldo.</p>
+    <div class="riesgos">
+      <div class="r crit"><div class="nivel"><span class="luz"></span>CRÍTICO</div><p>EFOS definitivo. Los CFDI no son deducibles ni acreditables.</p></div>
+      <div class="r alto"><div class="nivel"><span class="luz"></span>ALTO</div><p>EFOS presunto. Presunción de inexistencia; seguir hasta la resolución.</p></div>
+      <div class="r medio"><div class="nivel"><span class="luz"></span>MEDIO</div><p>Art. 69 firme, exigible o no localizado. Situación fiscal irregular.</p></div>
+      <div class="r limpio"><div class="nivel"><span class="luz"></span>LIMPIO</div><p>Sin coincidencias a la fecha de los datos. También BAJO e INFORMATIVO.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="tools" style="padding-top:8px">
+  <div class="wrap">
+    <div class="eyebrow">Herramientas</div>
+    <h2>Cinco tools. Todo por RFC o por nombre.</h2>
+    <div class="tools">
+      <div class="tool"><code>verificar_rfc</code><p>Un RFC → veredicto de riesgo con los registros del 69 y 69-B.</p></div>
+      <div class="tool"><code>verificar_lote</code><p>Hasta 500 RFCs (tu cartera de proveedores). Devuelve solo los hallazgos, por severidad.</p></div>
+      <div class="tool"><code>buscar_nombre</code><p>Por nombre o razón social cuando no tienes el RFC. FTS5, insensible a acentos.</p></div>
+      <div class="tool"><code>estado_datos</code><p>Vigencia declarada por el SAT, conteos por situación y última importación.</p></div>
+      <div class="tool"><code>actualizar_datos</code><p>Refresca los listados desde los archivos públicos del SAT. Idempotente por hash.</p></div>
+      <div class="tool" style="border-left:none"><code>+ sin IA</code><p>El veredicto es un árbol de reglas, no un modelo. Mismo input, mismo output — auditable.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="conectar">
+  <div class="wrap">
+    <div class="eyebrow">Cómo conectar</div>
+    <h2>De cero a verificando, en un minuto.</h2>
+    <p class="sub">Agrégalo como conector remoto en Claude, ChatGPT o tu app. Login con OAuth — sin llaves que pegar.</p>
+    <div class="url">
+      <span><span class="lbl">ENDPOINT MCP</span>https://sat69-mcp.onrender.com/connect</span>
+    </div>
+    <div class="pasos-c">
+      <div class="pc"><div class="n">01</div><h3>Agrega el conector</h3><p>Pega la URL en tu cliente MCP (Claude app, Cowork, Claude Code o tu propia app).</p></div>
+      <div class="pc"><div class="n">02</div><h3>Inicia sesión</h3><p>OAuth 2.1. El cliente se registra solo y obtiene su token.</p></div>
+      <div class="pc"><div class="n">03</div><h3>Pregunta</h3><p><code>"¿el RFC X está en la lista negra del SAT?"</code> y listo.</p></div>
+    </div>
+  </div>
+</section>
+
+<section style="padding-top:8px">
+  <div class="wrap">
+    <div class="eyebrow">Los datos</div>
+    <h2>Los archivos públicos del SAT, normalizados.</h2>
+    <p class="sub">Descargamos los CSV oficiales, los estructuramos y los servimos consultables. Persistencia durable; se refrescan solos.</p>
+    <div class="datos">
+      <div class="dato"><div class="big">~505 k</div><div class="lbl">registros indexados (69 + 69-B)</div></div>
+      <div class="dato"><div class="big">69 / 69-B</div><div class="lbl">Art. del CFF cubiertos</div></div>
+      <div class="dato"><div class="big">diario</div><div class="lbl">refresco automático</div></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div><b>WATR</b><br>MCP Suite · datos regulatorios de México, listos para agentes.</div>
+    <div class="aviso">Los resultados reflejan la última importación de los archivos públicos del SAT. No constituyen asesoría fiscal ni legal; para trámites formales, valida contra el portal oficial del SAT.</div>
+  </div>
+</footer>
+
+</body>
+</html>
