@@ -1,0 +1,8 @@
+name = "sat69-landing"
+compatibility_date = "2026-07-01"
+
+# El custom domain (p. ej. sat69.watr.mx) se conecta vía API/dashboard: el token
+# de wrangler no tiene permiso de rutas de zona. Ver README.md.
+[assets]
+directory = "./public"
+not_found_handling = "single-page-application"
