@@ -11,7 +11,7 @@ estático y Turso.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -112,6 +112,17 @@ class Settings:
     # --- Turso (persistencia durable) ---
     turso_url: str = os.getenv("TURSO_DATABASE_URL", "").strip()
     turso_token: str = os.getenv("TURSO_AUTH_TOKEN", "").strip()
+
+    # --- Capa IA (SOLO para resumen_cartera; el veredicto es determinista) ---
+    # Proveedor por env var; default Qwen (DashScope OpenAI-compatible).
+    llm_provider: str = os.getenv("LLM_PROVIDER", "qwen").strip().lower()
+    llm_model: str = os.getenv("LLM_MODEL", "").strip()
+    dashscope_key: str = (os.getenv("DASHSCOPE_API_KEY") or os.getenv("QWEN_API_KEY") or "").strip()
+    dashscope_base_url: str = os.getenv(
+        "DASHSCOPE_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    ).strip()
+    anthropic_key: str = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    gemini_key: str = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
 
     # --- Logging ---
     log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()

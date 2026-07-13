@@ -15,6 +15,7 @@ import logging
 from fastmcp import FastMCP
 
 from . import database as db
+from . import llm
 from .config import settings
 from .pipeline import process_import
 
@@ -108,7 +109,11 @@ def verificar_lote(rfcs: list[str]) -> dict:
         return {"error": 'Debes proporcionar una lista "rfcs" con al menos un RFC.'}
     if len(rfcs) > 500:
         return {"error": "Máximo 500 RFCs por lote."}
+    return _lote(rfcs)
 
+
+def _lote(rfcs: list[str]) -> dict:
+    """Verificación determinista de un lote (motor de reglas). Reusada por el resumen."""
     conteo = {k: 0 for k in ("CRITICO", "ALTO", "MEDIO", "BAJO", "INFORMATIVO", "LIMPIO")}
     coincidencias: list[dict] = []
     for rfc in rfcs:
@@ -128,6 +133,54 @@ def verificar_lote(rfcs: list[str]) -> dict:
         "conteo_por_riesgo": conteo,
         "coincidencias": coincidencias,
     }
+
+
+@mcp.tool
+def resumen_cartera(rfcs: list[str]) -> dict:
+    """Resumen ejecutivo en lenguaje natural de una cartera de RFCs.
+
+    El riesgo de cada RFC lo calcula el motor de reglas (DETERMINISTA); la IA
+    sólo redacta el brief a partir de esos veredictos ya calculados — nunca
+    decide el riesgo. Proveedor de IA conmutable por env var (LLM_PROVIDER).
+
+    Args:
+        rfcs: Lista de RFCs (máximo 500).
+
+    Returns:
+        Los datos deterministas (conteo_por_riesgo, coincidencias) + `resumen`
+        (texto de IA) y una `nota` de trazabilidad. Si la IA no está configurada,
+        `resumen` es None y devuelve igual los datos.
+    """
+    if not rfcs:
+        return {"error": 'Debes proporcionar una lista "rfcs" con al menos un RFC.'}
+    if len(rfcs) > 500:
+        return {"error": "Máximo 500 RFCs por lote."}
+
+    import json
+
+    data = _lote(rfcs)  # veredictos deterministas
+
+    system = (
+        "Eres analista de cumplimiento fiscal en México. Redacta un brief "
+        "ejecutivo, breve y accionable, sobre una cartera de proveedores ya "
+        "clasificada por un motor de reglas del SAT (Art. 69 y 69-B del CFF). "
+        "Usa SÓLO los datos dados; no inventes cifras ni cambies los veredictos. "
+        "Prioriza CRITICO (EFOS definitivo: los CFDI no son deducibles) y ALTO. "
+        "Español, directo. No es asesoría fiscal."
+    )
+    user = (
+        f"Total consultados: {data['total_consultados']}. "
+        f"Conteo por riesgo: {json.dumps(data['conteo_por_riesgo'], ensure_ascii=False)}.\n"
+        f"Hallazgos (hasta 40, por severidad):\n"
+        f"{json.dumps(data['coincidencias'][:40], ensure_ascii=False)}"
+    )
+    resumen = llm.resumir(system, user)
+
+    nota = ("Veredictos deterministas (motor de reglas); el resumen es redacción de "
+            "IA y no altera los veredictos.")
+    if resumen is None:
+        nota += " IA no configurada o no disponible: usa los datos deterministas."
+    return {**data, "resumen": resumen, "nota": nota}
 
 
 @mcp.tool
