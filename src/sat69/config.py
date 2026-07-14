@@ -20,11 +20,21 @@ _REPO_ROOT = _PACKAGE_ROOT.parents[1]
 # --- Fuentes de datos abiertos del SAT ------------------------------------
 # 69-B (EFOS): un archivo, 20 columnas, 2 líneas de nota antes del encabezado
 # real (por eso header_row = 3, basado en 1).
-URL_69B = "http://omawww.sat.gob.mx/cifras_sat/Documents/Listado_Completo_69-B.csv"
+# 2026-07: el SAT migró el archivo de datos abiertos 69-B a un blob de Azure; la
+# ruta vieja de omawww quedó CONGELADA en el corte 31-dic-2025 (seguía dando 200,
+# por eso el cron no fallaba mientras re-importaba datos viejos). Azure trae el
+# corte vigente. Overrideable por env por si el SAT vuelve a mover la fuente.
+URL_69B = os.getenv(
+    "SAT_URL_69B",
+    "https://wu1agsprosta001.blob.core.windows.net/agsc-publicaciones"
+    "/Datos_abiertos/Documents_AGAFF/Listado_completo_69-B.csv",
+)
 HEADER_ROW_69B = 3
 
 # 69 (situación fiscal firme): varios archivos, 6 columnas, encabezado en línea 1.
-BASE_69 = "http://omawww.sat.gob.mx/cifras_sat/Documents/"
+# Estos siguen en omawww (no tienen equivalente en el blob de Azure); overrideable
+# por env por consistencia con URL_69B.
+BASE_69 = os.getenv("SAT_BASE_69", "http://omawww.sat.gob.mx/cifras_sat/Documents/")
 FILES_69 = (
     "Firmes.csv",
     "Cancelados.csv",
