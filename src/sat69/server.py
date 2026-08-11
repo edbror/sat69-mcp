@@ -36,12 +36,30 @@ def _build_auth():
     """
     if not settings.oauth_enabled:
         return None
+    import secrets as _secrets
+
+    from fastmcp.server.auth import AccessToken
     from fastmcp.server.auth.providers.workos import (
         AuthKitProvider,
         WorkOSTokenVerifier,
     )
 
     logger.info("OAuth habilitado vía AuthKit (%s)", settings.authkit_domain)
+
+    class DualVerifier(WorkOSTokenVerifier):
+        """Acepta el MCP_API_KEY estático (servidor-a-servidor) O un token OAuth.
+
+        Con OAuth encendido, FastMCP es el único guardián del endpoint MCP y el
+        verifier por defecto rechazaba la key estática con 401 invalid_token —
+        las apps máquina-a-máquina quedaban fuera (lo detectó el cruce de
+        repse-mcp, WE-529; mismo fix que repse PR #4).
+        """
+
+        async def verify_token(self, token: str) -> AccessToken | None:
+            if settings.mcp_api_key and _secrets.compare_digest(token, settings.mcp_api_key):
+                return AccessToken(token=token, client_id="watr-static-key", scopes=[])
+            return await super().verify_token(token)
+
     # Los access tokens de AuthKit (DCR) traen aud = client_id, NO la resource
     # URL del MCP; el JWTVerifier por defecto los rechaza por audience mismatch.
     # WorkOSTokenVerifier valida vía el userinfo de AuthKit (sin chequeo de aud),
@@ -50,7 +68,7 @@ def _build_auth():
     return AuthKitProvider(
         authkit_domain=settings.authkit_domain,
         base_url=settings.base_url,
-        token_verifier=WorkOSTokenVerifier(authkit_domain=settings.authkit_domain),
+        token_verifier=DualVerifier(authkit_domain=settings.authkit_domain),
     )
 
 
