@@ -13,9 +13,11 @@ from __future__ import annotations
 import logging
 
 from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_access_token
 
 from . import database as db
 from . import llm
+from . import quota
 from .config import settings
 from .pipeline import process_import
 
@@ -96,6 +98,16 @@ Los resultados reflejan la última importación. No constituyen asesoría fiscal
 )
 
 
+def _gate() -> dict | None:
+    """Aplica el límite freemium por usuario (ver quota.py). Devuelve el dict de
+    error si se excedió —para retornarlo tal cual— o None si la consulta procede.
+    Nunca lanza: el gate de cobro jamás debe tumbar una tool."""
+    try:
+        return quota.check(get_access_token())
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @mcp.tool
 def verificar_rfc(rfc: str) -> dict:
     """Verifica un RFC contra las listas del SAT (Art. 69 y 69-B).
@@ -109,6 +121,8 @@ def verificar_rfc(rfc: str) -> dict:
     """
     if not (rfc or "").strip():
         return {"error": "Debes proporcionar un RFC."}
+    if (g := _gate()) is not None:
+        return g
     return db.verificar_rfc(rfc)
 
 
@@ -127,6 +141,8 @@ def verificar_lote(rfcs: list[str]) -> dict:
         return {"error": 'Debes proporcionar una lista "rfcs" con al menos un RFC.'}
     if len(rfcs) > 500:
         return {"error": "Máximo 500 RFCs por lote."}
+    if (g := _gate()) is not None:
+        return g
     return _lote(rfcs)
 
 
@@ -173,6 +189,8 @@ def resumen_cartera(rfcs: list[str]) -> dict:
         return {"error": 'Debes proporcionar una lista "rfcs" con al menos un RFC.'}
     if len(rfcs) > 500:
         return {"error": "Máximo 500 RFCs por lote."}
+    if (g := _gate()) is not None:
+        return g
 
     import json
 
@@ -217,6 +235,8 @@ def buscar_nombre(texto: str, dataset: str = "ambos", limite: int = 25) -> dict:
         return {"error": "El texto de búsqueda debe tener al menos 3 caracteres."}
     if dataset not in ("69", "69b", "ambos"):
         dataset = "ambos"
+    if (g := _gate()) is not None:
+        return g
     try:
         resultados = db.buscar_nombre(texto, dataset, limite)
     except Exception as exc:  # noqa: BLE001

@@ -123,6 +123,12 @@ class Settings:
     turso_url: str = os.getenv("TURSO_DATABASE_URL", "").strip()
     turso_token: str = os.getenv("TURSO_AUTH_TOKEN", "").strip()
 
+    # --- Freemium / quota (límite diario por usuario; el contador vive en Turso) ---
+    free_daily_limit: int = _env_int("SAT69_FREE_DAILY_LIMIT", 1)
+    paid_user_ids: frozenset[str] = frozenset(
+        x.strip() for x in os.getenv("SAT69_PAID_USER_IDS", "").split(",") if x.strip()
+    )
+
     # --- Capa IA (SOLO para resumen_cartera; el veredicto es determinista) ---
     # Proveedor por env var; default Qwen (DashScope OpenAI-compatible).
     llm_provider: str = os.getenv("LLM_PROVIDER", "qwen").strip().lower()
