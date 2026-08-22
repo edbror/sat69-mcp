@@ -1,8 +1,14 @@
 name = "sat69-landing"
 compatibility_date = "2026-07-01"
+main = "src/worker.js"
 
-# El custom domain (p. ej. sat69.watr.mx) se conecta vía API/dashboard: el token
-# de wrangler no tiene permiso de rutas de zona. Ver README.md.
+# El custom domain (sat69.watr.mx) se conecta vía API/dashboard: el token de
+# wrangler no tiene permiso de rutas de zona. Ver README.md.
+#
+# El Worker corre primero (run_worker_first) para poder proxyar el MCP a Render;
+# la landing estática se sirve vía el binding ASSETS. Ver src/worker.js.
 [assets]
 directory = "./public"
+binding = "ASSETS"
 not_found_handling = "single-page-application"
+run_worker_first = true
