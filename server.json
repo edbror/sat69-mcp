@@ -1,0 +1,17 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.edbror/sat69-mcp",
+  "title": "SAT69 — Listas del SAT (69 y 69-B del CFF)",
+  "description": "Verifica RFCs contra las listas del SAT de México (Art. 69 y 69-B del CFF / EFOS) y devuelve un veredicto de riesgo fiscal. Corre una cartera de hasta 500 RFCs y te marca cuáles te tumban la deducción antes de pagar. Datos oficiales del SAT, refresco diario.",
+  "version": "1.0.0",
+  "repository": {
+    "url": "https://github.com/edbror/sat69-mcp",
+    "source": "github"
+  },
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://sat69-mcp.onrender.com/mcp"
+    }
+  ]
+}
