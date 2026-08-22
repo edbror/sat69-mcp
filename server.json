@@ -11,7 +11,7 @@
   "remotes": [
     {
       "type": "streamable-http",
-      "url": "https://sat69-mcp.onrender.com/mcp"
+      "url": "https://sat69-mcp.onrender.com/connect"
     }
   ]
 }
