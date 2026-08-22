@@ -131,6 +131,54 @@ curl -sS -X POST $BASE/refresh -H "Authorization: Bearer $KEY"    # 200 success
 
 ---
 
+## 10. Lanzamiento público — OAuth + dominio de marca + directorio MCP
+
+**Meta:** SAT69 listado en el registro MCP oficial, conectable por cualquiera vía
+`https://sat69.watr.mx/connect`, con OAuth (AuthKit) dando identidad por-usuario y
+el gate freemium (1 consulta/día gratis) contando de verdad en Turso.
+
+Corre en este orden exacto (evita downtime y host-mismatch de OAuth):
+
+### 10.1 Turso — que el gate cuente (hoy cae-abierto sin esto)
+- 🟦 `turso db create sat69 --group default` (o reusa la existente).
+- 🟦 `turso db show sat69 --url` → `TURSO_DATABASE_URL` · `turso db tokens create sat69` → `TURSO_AUTH_TOKEN`.
+
+### 10.2 WorkOS AuthKit
+- ⬜ Crea proyecto en **WorkOS AuthKit** y **habilita DCR** (Dynamic Client Registration — sin DCR los clientes MCP no se auto-registran).
+- ⬜ Copia el **AuthKit domain**: `https://<tu-proyecto>.authkit.app`.
+- ℹ️ No hace falta configurar redirect URIs a mano: con DCR cada cliente registra las suyas.
+
+### 10.3 Render — servicio arriba y con OAuth
+- ⬜ **Resume** el servicio + sube a plan **Starter** (always-on; el free hiberna y tumba el launch).
+- ⬜ Setea env (`sync:false`):
+  - `AUTHKIT_DOMAIN` = el domain del 10.2
+  - `BASE_URL` = **`https://sat69.watr.mx`** ← host de marca (ya en `render.yaml`), NO onrender
+  - `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` = del 10.1
+  - (opcional) `SAT69_FREE_DAILY_LIMIT` (default 1) · `SAT69_PAID_USER_IDS` = subs de AuthKit de clientes de paga (ilimitados)
+- ⬜ Redeploy. Espera "Live".
+
+### 10.4 Cloudflare Worker — el dominio
+- 🟦 `cd landing && wrangler login && wrangler deploy` (el token DNS del zshrc no basta; requiere login).
+- ℹ️ El Worker (`landing/src/worker.js`) corre primero y proxya `/connect` + `/.well-known/oauth*` a Render; la landing se sirve en el resto.
+
+### 10.5 Verificación (contra el dominio de marca)
+```bash
+BASE=https://sat69.watr.mx
+curl -sS -o /dev/null -w "%{http_code}\n" $BASE/            # 200 (landing)
+curl -sSI $BASE/connect | grep -i www-authenticate          # Bearer resource_metadata="…/oauth-protected-resource/connect"
+curl -sS $BASE/.well-known/oauth-protected-resource         # 200 JSON, "resource":"https://sat69.watr.mx/connect"
+```
+- 🔎 Cliente MCP apuntando a `$BASE/connect` **sin header** → dispara flujo OAuth (login AuthKit), no 401 pelón.
+- 🔎 Gate freemium: 2ª consulta del día de un usuario free → dict `{"error":"limite_gratis_alcanzado", …}`.
+
+### 10.6 Rotar bearer + publicar
+- 🟦 **Rota `MCP_API_KEY`** (con OAuth sólo protege `/refresh`,`/reload`): regénéralo, actualiza Render + GH Secret.
+- 🟦 `cd .. && mcp-publisher login github && mcp-publisher publish` → SAT69 en el registro MCP oficial.
+
+> Modo privado/bearer (Fase 6) sigue válido para clientes B2B que prefieran header estático contra `onrender` — pero el **listado público** exige OAuth (10.2–10.3): sin él, `/connect` da 401 a quien no tenga el bearer.
+
+---
+
 ## Resumen de variables
 
 | Variable | Dónde | Requerida |

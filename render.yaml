@@ -22,7 +22,11 @@ services:
       - key: AUTHKIT_DOMAIN
         sync: false          # e.g. https://tu-proyecto.authkit.app (habilita OAuth 2.1 DCR)
       - key: BASE_URL
-        value: "https://sat69-mcp.onrender.com"
+        # Dominio de marca: el Worker de Cloudflare (landing/) proxya /connect y
+        # /.well-known/oauth* a este servicio. BASE_URL debe ser el host PÚBLICO
+        # para que el metadata de OAuth (PRM/RFC 9728) anuncie sat69.watr.mx y no
+        # el onrender crudo — si no, los clientes MCP fallan por host mismatch.
+        value: "https://sat69.watr.mx"
 
       # ── Turso (SQLite durable) ────────────────────────────────────────────
       - key: TURSO_DATABASE_URL
