@@ -1,4 +1,5 @@
 name = "sat69-landing"
+account_id = "f70ea6062f11ed4c504876390978f0d8"  # We Are The Robots
 compatibility_date = "2026-07-01"
 main = "src/worker.js"
 
