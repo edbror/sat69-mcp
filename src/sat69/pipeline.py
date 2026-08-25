@@ -83,6 +83,43 @@ def parse_69b(raw: bytes) -> tuple[list[dict], str | None]:
     return out, vigencia
 
 
+def parse_69b_bis(raw: bytes) -> tuple[list[dict], str | None]:
+    """Parsea el CSV del 69-B Bis (transmisión indebida de pérdidas fiscales).
+
+    12 columnas, 2 líneas de nota + encabezado (header_row = 3). Situaciones:
+    'Definitivo' y 'Sentencia Favorable'. Devuelve (filas, vigencia_declarada).
+    """
+    rows = _rows_from_bytes(raw)
+    vigencia = None
+    if rows:
+        m = re.search(r"actualizada al\s+(.+?)[;\.]?$", rows[0][0] if rows[0] else "", re.I)
+        if m:
+            vigencia = m.group(1).strip()
+
+    out: list[dict] = []
+    now = _now()
+    import json
+    for line in rows[settings.header_row_69b_bis:]:  # salta notas + encabezado
+        if len(line) < 12 or not (line[1] or "").strip():
+            continue
+        out.append({
+            "rfc": (line[1] or "").strip().upper(),
+            "nombre": " ".join((line[2] or "").split()) or None,
+            "situacion": (line[3] or "").strip() or None,
+            "oficio_definitivo_sat": (line[4] or "").strip() or None,
+            "publicacion_sat_definitivo": _fecha(line[5]),
+            "oficio_definitivo_dof": (line[6] or "").strip() or None,
+            "publicacion_dof_definitivo": _fecha(line[7]),
+            "oficio_sentencia_favorable_sat": (line[8] or "").strip() or None,
+            "publicacion_sat_sentencia_favorable": _fecha(line[9]),
+            "oficio_sentencia_favorable_dof": (line[10] or "").strip() or None,
+            "publicacion_dof_sentencia_favorable": _fecha(line[11]),
+            "datos": json.dumps(line, ensure_ascii=False),
+            "imported_at": now,
+        })
+    return out, vigencia
+
+
 def parse_69(raw: bytes, source_file: str) -> list[dict]:
     """Parsea un CSV del 69 (6 columnas, encabezado en línea 1)."""
     rows = _rows_from_bytes(raw)
@@ -121,6 +158,21 @@ def _import_69b(force: bool) -> dict:
     return {"source_file": src, "cached": False, "rows": n, "sat_actualizado_al": vigencia}
 
 
+def _import_69b_bis(force: bool) -> dict:
+    src = "Listado_69_B_Bis_Completo.csv"
+    if not settings.url_69b_bis:  # feature-flag: sin URL configurada, se omite
+        return {"source_file": src, "skipped": "SAT_URL_69B_BIS no configurada"}
+    raw = fetch_csv(settings.url_69b_bis)
+    h = sha256(raw)
+    if not force and db.get_source_hash(src) == h:
+        return {"source_file": src, "cached": True, "rows": None}
+
+    rows, vigencia = parse_69b_bis(raw)
+    n = db.replace_69b_bis(rows)
+    db.record_source("69bbis", src, h, n, _now(), sat_actualizado_al=vigencia)
+    return {"source_file": src, "cached": False, "rows": n, "sat_actualizado_al": vigencia}
+
+
 def _import_69_file(fname: str, force: bool) -> dict:
     url = settings.base_69.rstrip("/") + "/" + fname
     raw = fetch_csv(url)
@@ -137,10 +189,10 @@ def _import_69_file(fname: str, force: bool) -> dict:
 def process_import(dataset: str = "all", force_refresh: bool = False) -> dict:
     """Descarga y sincroniza los listados del SAT.
 
-    dataset: 'all' | '69' | '69b'
+    dataset: 'all' | '69' | '69b' | '69bbis'
     Idempotente por hash de archivo (salvo force_refresh).
     """
-    dataset = (dataset or "all").lower()
+    dataset = (dataset or "all").lower().replace("69b_bis", "69bbis")
     resultados: list[dict] = []
     errores: list[dict] = []
 
@@ -151,6 +203,13 @@ def process_import(dataset: str = "all", force_refresh: bool = False) -> dict:
             except Exception as exc:  # noqa: BLE001
                 logger.error("69-B falló: %s", exc)
                 errores.append({"source_file": "Listado_Completo_69-B.csv", "error": str(exc)})
+
+        if dataset in ("all", "69bbis"):
+            try:
+                resultados.append(_import_69b_bis(force_refresh))
+            except Exception as exc:  # noqa: BLE001
+                logger.error("69-B Bis falló: %s", exc)
+                errores.append({"source_file": "Listado_69_B_Bis_Completo.csv", "error": str(exc)})
 
         if dataset in ("all", "69"):
             for fname in settings.files_69:

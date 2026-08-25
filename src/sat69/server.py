@@ -83,8 +83,13 @@ Servidor MCP para consultar las listas del SAT (México):
 • Artículo 69-B del CFF (EFOS): contribuyentes con operaciones simuladas.
   Situaciones: Presunto, Desvirtuado, Definitivo, Sentencia Favorable.
   Un "Definitivo" implica que sus CFDI NO producen efectos fiscales.
+• Artículo 69-B Bis del CFF: transmisión INDEBIDA del derecho a disminuir
+  pérdidas fiscales. Situaciones: Definitivo, Sentencia Favorable. Es señal de
+  riesgo fiscal del contribuyente, pero no invalida por sí sola sus CFDI.
 • Artículo 69 del CFF: contribuyentes con situación fiscal firme
   (firmes, exigibles, no localizados, cancelados, condonados).
+
+Prioridad de severidad: 69-B (EFOS) > 69-B Bis > 69.
 
 Tools:
 1. `verificar_rfc` — un RFC → veredicto de riesgo (CRITICO…LIMPIO).
@@ -110,14 +115,14 @@ def _gate() -> dict | None:
 
 @mcp.tool
 def verificar_rfc(rfc: str) -> dict:
-    """Verifica un RFC contra las listas del SAT (Art. 69 y 69-B).
+    """Verifica un RFC contra las listas del SAT (Art. 69, 69-B y 69-B Bis).
 
     Args:
         rfc: RFC a consultar (física o moral). Se normaliza automáticamente.
 
     Returns:
         Veredicto con riesgo (CRITICO|ALTO|MEDIO|BAJO|INFORMATIVO|LIMPIO),
-        explicación y los registros encontrados en cada lista.
+        explicación y los registros encontrados en cada lista (incl. 69-B Bis).
     """
     if not (rfc or "").strip():
         return {"error": "Debes proporcionar un RFC."}
@@ -225,7 +230,7 @@ def buscar_nombre(texto: str, dataset: str = "ambos", limite: int = 25) -> dict:
 
     Args:
         texto: Fragmento del nombre (mínimo 3 caracteres).
-        dataset: "69", "69b" o "ambos" (default).
+        dataset: "69", "69b", "69bbis" o "ambos" (default).
         limite: Máximo de resultados por lista (1–100, default 25).
 
     Returns:
@@ -233,7 +238,7 @@ def buscar_nombre(texto: str, dataset: str = "ambos", limite: int = 25) -> dict:
     """
     if len((texto or "").strip()) < 3:
         return {"error": "El texto de búsqueda debe tener al menos 3 caracteres."}
-    if dataset not in ("69", "69b", "ambos"):
+    if dataset not in ("69", "69b", "69bbis", "ambos"):
         dataset = "ambos"
     if (g := _gate()) is not None:
         return g
@@ -256,7 +261,7 @@ def actualizar_datos(dataset: str = "all", force_refresh: bool = False) -> dict:
     """Descarga y sincroniza los listados del SAT (idempotente por hash).
 
     Args:
-        dataset: "all" (default), "69" o "69b".
+        dataset: "all" (default), "69", "69b" o "69bbis".
         force_refresh: Reprocesa aunque el archivo no haya cambiado.
 
     Returns:

@@ -31,6 +31,14 @@ URL_69B = os.getenv(
 )
 HEADER_ROW_69B = 3
 
+# 69-B Bis (transmisión indebida de pérdidas fiscales): un archivo, 12 columnas,
+# 2 líneas de nota antes del encabezado (header_row = 3, igual que 69-B). Lista
+# chica (decenas). El SAT la sirve como CSV Latin-1 aunque el archivo se llame
+# .xls. La URL de descarga NO es un path abierto obvio, así que va por env; si
+# SAT_URL_69B_BIS está vacío, la ingesta del 69-B Bis se omite (feature-flag).
+URL_69B_BIS = os.getenv("SAT_URL_69B_BIS", "")
+HEADER_ROW_69B_BIS = 3
+
 # 69 (situación fiscal firme): varios archivos, 6 columnas, encabezado en línea 1.
 # Estos siguen en omawww (no tienen equivalente en el blob de Azure); overrideable
 # por env por consistencia con URL_69B.
@@ -94,6 +102,8 @@ class Settings:
     # --- Fuentes ---
     url_69b: str = URL_69B
     header_row_69b: int = HEADER_ROW_69B
+    url_69b_bis: str = URL_69B_BIS
+    header_row_69b_bis: int = HEADER_ROW_69B_BIS
     base_69: str = BASE_69
     files_69: tuple[str, ...] = FILES_69
     source_encoding: str = SOURCE_ENCODING

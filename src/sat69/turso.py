@@ -31,6 +31,14 @@ _TABLES = {
         "publicacion_dof_definitivos", "publicacion_sat_sentencia_favorable",
         "publicacion_dof_sentencia_favorable", "datos", "imported_at",
     ],
+    "registros_69b_bis": [
+        "id", "rfc", "nombre", "situacion",
+        "oficio_definitivo_sat", "publicacion_sat_definitivo",
+        "oficio_definitivo_dof", "publicacion_dof_definitivo",
+        "oficio_sentencia_favorable_sat", "publicacion_sat_sentencia_favorable",
+        "oficio_sentencia_favorable_dof", "publicacion_dof_sentencia_favorable",
+        "datos", "imported_at",
+    ],
     "source_files": [
         "id", "dataset", "source_file", "sha256", "rows",
         "sat_actualizado_al", "status", "error_msg", "fetched_at",
@@ -50,6 +58,13 @@ _SCHEMA_STMTS = [
         publicacion_sat_definitivos TEXT, publicacion_dof_definitivos TEXT,
         publicacion_sat_sentencia_favorable TEXT,
         publicacion_dof_sentencia_favorable TEXT, datos TEXT, imported_at TEXT)""",
+    """CREATE TABLE IF NOT EXISTS registros_69b_bis (
+        id INTEGER PRIMARY KEY, rfc TEXT, nombre TEXT, situacion TEXT,
+        oficio_definitivo_sat TEXT, publicacion_sat_definitivo TEXT,
+        oficio_definitivo_dof TEXT, publicacion_dof_definitivo TEXT,
+        oficio_sentencia_favorable_sat TEXT, publicacion_sat_sentencia_favorable TEXT,
+        oficio_sentencia_favorable_dof TEXT, publicacion_dof_sentencia_favorable TEXT,
+        datos TEXT, imported_at TEXT)""",
     """CREATE TABLE IF NOT EXISTS source_files (
         id INTEGER PRIMARY KEY, dataset TEXT, source_file TEXT UNIQUE, sha256 TEXT,
         rows INTEGER, sat_actualizado_al TEXT, status TEXT, error_msg TEXT,

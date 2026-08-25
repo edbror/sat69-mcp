@@ -62,3 +62,39 @@ def test_buscar_nombre_fts(fresh_db):
     db.replace_69_file("Firmes.csv", pipeline.parse_69(CSV_69, "Firmes.csv"))
     res = db.buscar_nombre("aplica", "69")
     assert res["69"] and res["69"][0]["rfc"] == "AAG090703QT6"
+
+
+# --- 69-B Bis: parseo contra el archivo real del SAT (fixture) ---------------
+_FIXTURE_69B_BIS = Path(__file__).parent / "fixtures" / "69b_bis_sample.csv"
+
+
+def test_parse_69b_bis_fixture_real():
+    raw = _FIXTURE_69B_BIS.read_bytes()
+    rows, vigencia = pipeline.parse_69b_bis(raw)
+    assert vigencia == "05 de junio de 2026"
+    assert len(rows) == 3
+    por_rfc = {r["rfc"]: r for r in rows}
+    assert por_rfc["CPH061010RB7"]["situacion"] == "Definitivo"
+    assert por_rfc["CPH061010RB7"]["publicacion_dof_definitivo"] == "2024-07-05"
+    # el nombre venía con salto de línea embebido → se normaliza a una sola línea.
+    assert "\n" not in por_rfc["CPH061010RB7"]["nombre"]
+    assert por_rfc["OAN151230HWA"]["situacion"] == "Sentencia Favorable"
+
+
+def test_carga_y_veredicto_69b_bis(fresh_db):
+    rows, _ = pipeline.parse_69b_bis(_FIXTURE_69B_BIS.read_bytes())
+    db.replace_69b_bis(rows)
+
+    r = db.verificar_rfc("cph061010rb7")            # Definitivo 69-B Bis
+    assert r["riesgo"] == "MEDIO"
+    assert r["en_69b_bis"] is True
+    assert r["en_69b"] is False
+
+    fav = db.verificar_rfc("OAN151230HWA")          # Sentencia Favorable
+    assert fav["riesgo"] == "BAJO"
+
+
+def test_buscar_nombre_69b_bis(fresh_db):
+    db.replace_69b_bis(pipeline.parse_69b_bis(_FIXTURE_69B_BIS.read_bytes())[0])
+    res = db.buscar_nombre("bernabastos", "69bbis")
+    assert res["69b_bis"] and res["69b_bis"][0]["rfc"] == "BER160621KN5"
