@@ -11,3 +11,6 @@ dist/
 build/
 .DS_Store
 .gstack/
+
+# muestras locales del SAT (no versionar; pesados)
+/data/samples/

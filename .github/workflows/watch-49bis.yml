@@ -1,0 +1,41 @@
+name: Watch Art. 49 Bis
+
+# El SAT aún no publica el 49 Bis como datos abiertos. Este job revisa semanal-
+# mente si ya apareció un archivo descargable; si sí, abre un issue para que lo
+# integremos (mirror del 69-B Bis). Ver scripts/watch_49bis.py y docs/roadmap.md.
+
+on:
+  schedule:
+    - cron: "0 13 * * 1"   # lunes ~07:00 America/Mexico_City
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - id: probe
+        run: |
+          out=$(python scripts/watch_49bis.py)
+          echo "result=$out" >> "$GITHUB_OUTPUT"
+          echo "$out"
+      - name: Abrir issue si el 49 Bis ya está disponible
+        if: startsWith(steps.probe.outputs.result, 'FOUND')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          url="${{ steps.probe.outputs.result }}"; url="${url#FOUND }"
+          existing=$(gh issue list --state open --search "Art. 49 Bis disponible in:title" --json number --jq 'length')
+          if [ "$existing" = "0" ]; then
+            gh issue create \
+              --title "Art. 49 Bis disponible como datos abiertos — integrar" \
+              --body "El watcher detectó un archivo descargable de 49 Bis: $url
+
+          Integrarlo como el 69-B Bis (feature/69b-bis): config \`SAT_URL_49BIS\`, tabla \`registros_49bis\`, parser, risk y tools. Ver docs/roadmap.md."
+          fi

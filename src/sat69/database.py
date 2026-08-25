@@ -105,6 +105,25 @@ CREATE TABLE IF NOT EXISTS registros_69b (
 CREATE INDEX IF NOT EXISTS idx_69b_rfc ON registros_69b(rfc);
 CREATE INDEX IF NOT EXISTS idx_69b_sit ON registros_69b(situacion);
 
+CREATE TABLE IF NOT EXISTS registros_69b_bis (
+    id                                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    rfc                                  TEXT NOT NULL,
+    nombre                               TEXT,
+    situacion                            TEXT,
+    oficio_definitivo_sat                TEXT,
+    publicacion_sat_definitivo           TEXT,
+    oficio_definitivo_dof                TEXT,
+    publicacion_dof_definitivo           TEXT,
+    oficio_sentencia_favorable_sat       TEXT,
+    publicacion_sat_sentencia_favorable  TEXT,
+    oficio_sentencia_favorable_dof       TEXT,
+    publicacion_dof_sentencia_favorable  TEXT,
+    datos                                TEXT,
+    imported_at                          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_69bbis_rfc ON registros_69b_bis(rfc);
+CREATE INDEX IF NOT EXISTS idx_69bbis_sit ON registros_69b_bis(situacion);
+
 CREATE TABLE IF NOT EXISTS source_files (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     dataset            TEXT NOT NULL,        -- '69' | '69b'
@@ -127,6 +146,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS reg69b_fts USING fts5(
     nombre,
     tokenize = 'unicode61 remove_diacritics 1'
 );
+CREATE VIRTUAL TABLE IF NOT EXISTS reg69bbis_fts USING fts5(
+    rfc UNINDEXED,
+    nombre,
+    tokenize = 'unicode61 remove_diacritics 1'
+);
 
 CREATE TRIGGER IF NOT EXISTS reg69_ai AFTER INSERT ON registros_69
 WHEN NEW.razon_social IS NOT NULL BEGIN
@@ -142,6 +166,14 @@ WHEN NEW.nombre IS NOT NULL BEGIN
 END;
 CREATE TRIGGER IF NOT EXISTS reg69b_ad AFTER DELETE ON registros_69b BEGIN
     DELETE FROM reg69b_fts WHERE rowid = OLD.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS reg69bbis_ai AFTER INSERT ON registros_69b_bis
+WHEN NEW.nombre IS NOT NULL BEGIN
+    INSERT INTO reg69bbis_fts(rowid, rfc, nombre) VALUES (NEW.id, NEW.rfc, NEW.nombre);
+END;
+CREATE TRIGGER IF NOT EXISTS reg69bbis_ad AFTER DELETE ON registros_69b_bis BEGIN
+    DELETE FROM reg69bbis_fts WHERE rowid = OLD.id;
 END;
 """
 
@@ -194,6 +226,33 @@ def replace_69b(rows: list[dict]) -> int:
                 :oficio_definitivos_sat, :publicacion_sat_definitivos,
                 :publicacion_dof_definitivos, :publicacion_sat_sentencia_favorable,
                 :publicacion_dof_sentencia_favorable, :datos, :imported_at
+            )
+            """,
+            rows,
+        )
+    return len(rows)
+
+
+def replace_69b_bis(rows: list[dict]) -> int:
+    """Reemplaza por completo el Art. 69-B Bis (snapshot único del SAT)."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM registros_69b_bis")
+        conn.executemany(
+            """
+            INSERT INTO registros_69b_bis (
+                rfc, nombre, situacion,
+                oficio_definitivo_sat, publicacion_sat_definitivo,
+                oficio_definitivo_dof, publicacion_dof_definitivo,
+                oficio_sentencia_favorable_sat, publicacion_sat_sentencia_favorable,
+                oficio_sentencia_favorable_dof, publicacion_dof_sentencia_favorable,
+                datos, imported_at
+            ) VALUES (
+                :rfc, :nombre, :situacion,
+                :oficio_definitivo_sat, :publicacion_sat_definitivo,
+                :oficio_definitivo_dof, :publicacion_dof_definitivo,
+                :oficio_sentencia_favorable_sat, :publicacion_sat_sentencia_favorable,
+                :oficio_sentencia_favorable_dof, :publicacion_dof_sentencia_favorable,
+                :datos, :imported_at
             )
             """,
             rows,
@@ -254,10 +313,17 @@ def verificar_rfc(rfc_original: str) -> dict:
                    publicacion_dof_definitivos, publicacion_dof_sentencia_favorable
             FROM registros_69b WHERE rfc = ?
             """, (rfc,)).fetchall()]
+        r69bbis = [dict(r) for r in conn.execute(
+            """
+            SELECT nombre, situacion, publicacion_dof_definitivo,
+                   publicacion_dof_sentencia_favorable
+            FROM registros_69b_bis WHERE rfc = ?
+            """, (rfc,)).fetchall()]
 
     riesgo, veredicto = risk.evaluar(
         [x["supuesto"] for x in r69],
         [x["situacion"] for x in r69b],
+        [x["situacion"] for x in r69bbis],
     )
     return {
         "rfc_consultado": rfc_original,
@@ -266,8 +332,10 @@ def verificar_rfc(rfc_original: str) -> dict:
         "riesgo": riesgo,
         "veredicto": veredicto,
         "en_69b": bool(r69b),
+        "en_69b_bis": bool(r69bbis),
         "en_69": bool(r69),
         "registros_69b": r69b,
+        "registros_69b_bis": r69bbis,
         "registros_69": r69,
     }
 
@@ -286,6 +354,13 @@ def buscar_nombre(texto: str, dataset: str = "ambos", limite: int = 25) -> dict:
                 FROM reg69b_fts f JOIN registros_69b r ON f.rowid = r.id
                 WHERE reg69b_fts MATCH ? LIMIT ?
                 """, (match, limite)).fetchall()]
+        if dataset in ("ambos", "69bbis"):
+            out["69b_bis"] = [dict(r) for r in conn.execute(
+                """
+                SELECT r.rfc, r.nombre, r.situacion
+                FROM reg69bbis_fts f JOIN registros_69b_bis r ON f.rowid = r.id
+                WHERE reg69bbis_fts MATCH ? LIMIT ?
+                """, (match, limite)).fetchall()]
         if dataset in ("ambos", "69"):
             out["69"] = [dict(r) for r in conn.execute(
                 """
@@ -300,26 +375,34 @@ def estado_datos() -> dict:
     with get_conn() as conn:
         total_69 = conn.execute("SELECT COUNT(*) c FROM registros_69").fetchone()["c"]
         total_69b = conn.execute("SELECT COUNT(*) c FROM registros_69b").fetchone()["c"]
+        total_69bbis = conn.execute("SELECT COUNT(*) c FROM registros_69b_bis").fetchone()["c"]
         por_supuesto = {r["supuesto"]: r["n"] for r in conn.execute(
             "SELECT supuesto, COUNT(*) n FROM registros_69 GROUP BY supuesto").fetchall()}
         por_situacion = {r["situacion"]: r["n"] for r in conn.execute(
             "SELECT situacion, COUNT(*) n FROM registros_69b GROUP BY situacion").fetchall()}
+        por_situacion_bis = {r["situacion"]: r["n"] for r in conn.execute(
+            "SELECT situacion, COUNT(*) n FROM registros_69b_bis GROUP BY situacion").fetchall()}
         fuentes = [dict(r) for r in conn.execute(
             "SELECT dataset, source_file, rows, sat_actualizado_al, status, fetched_at "
             "FROM source_files ORDER BY dataset, source_file").fetchall()]
 
-    if total_69 == 0 and total_69b == 0:
+    if total_69 == 0 and total_69b == 0 and total_69bbis == 0:
         return {"status": "no_data",
                 "message": "No hay datos. Ejecuta actualizar_datos() primero."}
 
     vig = next((f["sat_actualizado_al"] for f in fuentes
                 if f["dataset"] == "69b" and f["sat_actualizado_al"]), None)
+    vig_bis = next((f["sat_actualizado_al"] for f in fuentes
+                    if f["dataset"] == "69bbis" and f["sat_actualizado_al"]), None)
     ult = max((f["fetched_at"] for f in fuentes if f["fetched_at"]), default=None)
     return {
         "status": "ok",
         "art_69": {"total_registros": total_69, "por_supuesto": por_supuesto},
         "art_69b": {"total_registros": total_69b, "por_situacion": por_situacion,
                     "sat_actualizado_al": vig},
+        "art_69b_bis": {"total_registros": total_69bbis,
+                        "por_situacion": por_situacion_bis,
+                        "sat_actualizado_al": vig_bis},
         "ultima_importacion": ult,
         "fuentes": fuentes,
     }

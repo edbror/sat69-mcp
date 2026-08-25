@@ -185,6 +185,7 @@ curl -sS $BASE/.well-known/oauth-protected-resource         # 200 JSON, "resourc
 |----------|-------|-----------|
 | `MCP_API_KEY` | Render + GH Secret | Sí (bearer M2M) |
 | `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | Render | Sí (persistencia durable) |
+| `SAT_URL_69B_BIS` | Render + GH Secret | No (vacío = se omite el 69-B Bis) |
 | `BASE_URL` | Render | Sí (para OAuth / metadata) |
 | `AUTHKIT_DOMAIN` | Render | Sólo si activas OAuth |
 | `FETCH_PROXY` / `DATAIMPULSE_*` | Render | No (SAT no bloquea datacenter) |
