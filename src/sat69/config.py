@@ -33,10 +33,14 @@ HEADER_ROW_69B = 3
 
 # 69-B Bis (transmisión indebida de pérdidas fiscales): un archivo, 12 columnas,
 # 2 líneas de nota antes del encabezado (header_row = 3, igual que 69-B). Lista
-# chica (decenas). El SAT la sirve como CSV Latin-1 aunque el archivo se llame
-# .xls. La URL de descarga NO es un path abierto obvio, así que va por env; si
-# SAT_URL_69B_BIS está vacío, la ingesta del 69-B Bis se omite (feature-flag).
-URL_69B_BIS = os.getenv("SAT_URL_69B_BIS", "")
+# chica (decenas). Vive en el mismo blob de Azure que el 69-B pero bajo
+# Documents_AGGC (no AGAFF). Overrideable por env; `SAT_URL_69B_BIS=""` (vacío
+# explícito) desactiva la ingesta del 69-B Bis (feature-flag).
+URL_69B_BIS = os.getenv(
+    "SAT_URL_69B_BIS",
+    "https://wu1agsprosta001.blob.core.windows.net/agsc-publicaciones"
+    "/Datos_abiertos/Documents_AGGC/Listado_69_B_Bis_Completo.csv",
+)
 HEADER_ROW_69B_BIS = 3
 
 # 69 (situación fiscal firme): varios archivos, 6 columnas, encabezado en línea 1.
