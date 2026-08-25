@@ -16,16 +16,22 @@ from __future__ import annotations
 import sys
 import urllib.request
 
-# Rutas candidatas, calcadas del patrón real de 69-B / 69-B Bis.
-_OMAWWW = "http://omawww.sat.gob.mx/cifras_sat/Documents"
-_AZURE = ("https://wu1agsprosta001.blob.core.windows.net/agsc-publicaciones"
-          "/Datos_abiertos/Documents_AGAFF")
-_NAMES = [
-    "Listado_completo_49-Bis.csv", "Listado_completo_49-Bis.xls",
-    "Listado_49_Bis_Completo.csv", "Listado_49_Bis_Completo.xls",
-    "Listado_completo_Art_49-Bis.csv",
+# Rutas candidatas, calcadas del patrón real del 69-B Bis, que vive en el blob
+# de Azure bajo Documents_AGGC (el 69-B main está en Documents_AGAFF). El 49 Bis,
+# cuando el SAT lo consolide, muy probablemente saldrá en AGGC con el mismo patrón
+# `Listado_49_Bis_Completo.csv`. Se prueban ambos contenedores + omawww por si acaso.
+_AZURE = "https://wu1agsprosta001.blob.core.windows.net/agsc-publicaciones/Datos_abiertos"
+_HOSTS = [
+    f"{_AZURE}/Documents_AGGC",   # ← donde vive el 69-B Bis; el candidato más fuerte
+    f"{_AZURE}/Documents_AGAFF",
+    "http://omawww.sat.gob.mx/cifras_sat/Documents",
 ]
-_CANDIDATES = [f"{host}/{n}" for host in (_OMAWWW, _AZURE) for n in _NAMES]
+_NAMES = [
+    "Listado_49_Bis_Completo.csv", "Listado_49_Bis_Completo.xls",
+    "Listado_completo_49-Bis.csv", "Listado_completo_49-Bis.xls",
+    "Listado_49_BIS_Completo.csv", "Listado_completo_Art_49-Bis.csv",
+]
+_CANDIDATES = [f"{host}/{n}" for host in _HOSTS for n in _NAMES]
 
 
 def _exists(url: str) -> bool:
