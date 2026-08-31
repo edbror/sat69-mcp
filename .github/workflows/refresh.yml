@@ -27,8 +27,10 @@ jobs:
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
-          # Vacío = se omite el 69-B Bis (feature-flag en config.py). Setea el
-          # secret SAT_URL_69B_BIS con la URL del CSV del SAT para activarlo.
-          SAT_URL_69B_BIS: ${{ secrets.SAT_URL_69B_BIS }}
+          # OJO: NO inyectar SAT_URL_69B_BIS aquí desde un secret. Si el secret no
+          # existe, GitHub la pone como env vacía y `os.getenv(.., default)` devuelve
+          # "" (no el default), lo que ACTIVA el feature-flag y omite el 69-B Bis.
+          # La URL ya está horneada en config.py (es pública). Overridear solo si
+          # el SAT mueve la fuente, y en ese caso con un valor NO vacío.
           DB_PATH: /tmp/sat69.db
         run: python -m sat69.pipeline ${{ github.event.inputs.force == 'true' && '--force' || '' }}
