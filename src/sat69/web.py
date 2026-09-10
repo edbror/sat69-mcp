@@ -6,6 +6,8 @@ Envuelve el servidor FastMCP con:
   • Middleware de auth Bearer (MCP_API_KEY) selectiva por ruta.
   • Arranque: pull de Turso → SQLite local, e ingesta en segundo plano si vacío.
   • /health (sin auth) para los health checks de Render.
+  • /verificar (bearer siempre) — el mismo veredicto que la tool, en REST plano,
+    para backends que no hablan MCP.
 
 Arranque:
     python -m sat69.web   |   sat69-web
@@ -35,7 +37,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
     """Bearer estático (MCP_API_KEY) selectivo por ruta.
 
     - /health          → siempre abierto.
-    - /refresh,/reload → siempre exigen el Bearer (llamadas máquina-a-máquina).
+    - /refresh,/reload,/verificar → siempre exigen el Bearer (máquina-a-máquina).
     - /mcp y metadata OAuth:
         · OAuth ON  → pasa (FastMCP/AuthKit maneja la auth de /mcp).
         · OAuth OFF → exige el Bearer estático.
@@ -45,7 +47,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
     def _needs_static_bearer(self, path: str) -> bool:
         if path == "/health":
             return False
-        if path in ("/refresh", "/reload"):
+        if path in ("/refresh", "/reload", "/verificar"):
             return True
         return not settings.oauth_enabled
 
@@ -127,6 +129,48 @@ async def _refresh(request: Request) -> JSONResponse:
     return JSONResponse(result, status_code=200 if result.get("success") else 502)
 
 
+async def _verificar(request: Request) -> JSONResponse:
+    """Veredicto de un RFC en REST plano, para servidor-a-servidor.
+
+    Existe porque hablar MCP desde un backend es un handshake de sesión completo
+    para una pregunta de una línea. Llama a la MISMA `database.verificar_rfc` que
+    la tool, sin capa de traducción, para que las dos no se desincronicen.
+
+    **El guardia que importa.** Si la tabla del 69-B está vacía —arranque en frío,
+    pull de Turso a medias, ingesta fallida— `verificar_rfc` devolvería LIMPIO para
+    todo RFC del mundo. Un consumidor lo guardaría como "proveedor verificado y sin
+    hallazgos", que es una constancia falsa. Así que se responde 503: quien llama
+    debe registrar "no pude verificar", nunca "está limpio".
+
+    Ojo con el matiz: `estado_datos()` sólo dice `no_data` cuando las TRES tablas
+    están vacías. Aquí se checa el 69-B por separado, porque es la lista que decide.
+    """
+    from starlette.concurrency import run_in_threadpool
+
+    from . import database as db
+
+    rfc = (request.query_params.get("rfc") or "").strip()
+    if not rfc:
+        return JSONResponse({"error": "Falta el parámetro `rfc`."}, status_code=400)
+
+    estado = await run_in_threadpool(db.estado_datos)
+    registros_69b = (estado.get("art_69b") or {}).get("total_registros", 0)
+    if estado.get("status") != "ok" or not registros_69b:
+        return JSONResponse(
+            {
+                "error": "Índice sin datos del 69-B; no se puede emitir veredicto.",
+                "status": estado.get("status"),
+            },
+            status_code=503,
+        )
+
+    resultado = await run_in_threadpool(db.verificar_rfc, rfc)
+    # La vigencia del dato es parte de la evidencia: en un expediente de defensa
+    # importa contra qué corte del SAT se verificó, no sólo qué día se preguntó.
+    resultado["sat_actualizado_al"] = (estado.get("art_69b") or {}).get("sat_actualizado_al")
+    return JSONResponse(resultado)
+
+
 async def _oauth_protected_resource_root(request: Request) -> JSONResponse:
     """Metadata OAuth (RFC 9728) servida en la RAÍZ.
 
@@ -164,6 +208,7 @@ def create_app() -> Starlette:
         Route("/health", _health, methods=["GET"]),
         Route("/refresh", _refresh, methods=["POST"]),
         Route("/reload", _reload, methods=["POST"]),
+        Route("/verificar", _verificar, methods=["GET"]),
     ]
     if settings.oauth_enabled:
         routes.append(Route(
