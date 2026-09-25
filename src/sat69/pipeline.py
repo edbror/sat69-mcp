@@ -39,6 +39,74 @@ def _fecha(v: str | None) -> str | None:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Guard de frescura
+# ---------------------------------------------------------------------------
+# Una descarga corta, vacía o vieja NO debe pisar datos buenos: el reemplazo es
+# destructivo y la fuente es de un tercero que ya nos ha servido archivos raros.
+# Lección heredada del MCP de REPSE, que lo agregó tras ver esto de cerca.
+#
+# El piso es RELATIVO a propósito. Un `MIN_FILAS` absoluto no sirve aquí: el
+# 69-B Bis son 3 filas en todo el país y el 69 son cientos de miles, así que
+# cualquier constante estaría mal para uno de los dos. Perder fracción de lo que
+# ya había significa lo mismo en ambas escalas.
+MERMA_MAX = 0.10
+
+MESES = {
+    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+    "julio": 7, "agosto": 8, "septiembre": 9, "setiembre": 9, "octubre": 10,
+    "noviembre": 11, "diciembre": 12,
+}
+
+
+class ImportacionSospechosa(RuntimeError):
+    """El archivo descargado no pasa el guard: se conserva lo anterior.
+
+    `process_import` ya atrapa por archivo, así que esto degrada a un error en
+    `errores[]` y los demás listados siguen importando.
+    """
+
+
+def _vigencia_iso(v: str | None) -> str | None:
+    """"31 de Agosto de 2026" → "2026-08-31". None si no se puede leer.
+
+    El SAT escribe el mes con mayúscula inicial o sin ella, según el archivo y
+    el día — por eso se compara en minúsculas y no se confía en el formato.
+    """
+    m = re.search(r"(\d{1,2})\s+de\s+([A-Za-zÁÉÍÓÚáéíóú]+)\s+de\s+(\d{4})", v or "")
+    if not m:
+        return None
+    mes = MESES.get(m.group(2).lower())
+    if mes is None:
+        return None
+    return f"{int(m.group(3)):04d}-{mes:02d}-{int(m.group(1)):02d}"
+
+
+def _verificar_frescura(src: str, rows: list[dict], vigencia: str | None) -> None:
+    """Aborta el reemplazo si el archivo nuevo es peor que el que ya está."""
+    prev = db.get_source_state(src)
+    if prev is None:  # primera importación: no hay nada que proteger
+        return
+
+    prev_n = prev["rows"] or 0
+    if prev_n and not rows:
+        raise ImportacionSospechosa(
+            f"{src}: 0 filas y había {prev_n}; se conserva lo anterior"
+        )
+    if prev_n and len(rows) < prev_n * (1 - MERMA_MAX):
+        raise ImportacionSospechosa(
+            f"{src}: {len(rows)} filas contra {prev_n} previas "
+            f"(merma > {MERMA_MAX:.0%}); se conserva lo anterior"
+        )
+
+    nueva, vieja = _vigencia_iso(vigencia), _vigencia_iso(prev["sat_actualizado_al"])
+    if nueva and vieja and nueva < vieja:
+        raise ImportacionSospechosa(
+            f"{src}: el SAT declara {nueva}, anterior a {vieja} ya importada; "
+            "se conserva lo anterior"
+        )
+
+
 def _rows_from_bytes(raw: bytes) -> list[list[str]]:
     text = raw.decode(settings.source_encoding, errors="replace")
     return list(csv.reader(io.StringIO(text)))
@@ -153,6 +221,7 @@ def _import_69b(force: bool) -> dict:
         return {"source_file": src, "cached": True, "rows": None}
 
     rows, vigencia = parse_69b(raw)
+    _verificar_frescura(src, rows, vigencia)
     n = db.replace_69b(rows)
     db.record_source("69b", src, h, n, _now(), sat_actualizado_al=vigencia)
     return {"source_file": src, "cached": False, "rows": n, "sat_actualizado_al": vigencia}
@@ -168,6 +237,7 @@ def _import_69b_bis(force: bool) -> dict:
         return {"source_file": src, "cached": True, "rows": None}
 
     rows, vigencia = parse_69b_bis(raw)
+    _verificar_frescura(src, rows, vigencia)
     n = db.replace_69b_bis(rows)
     db.record_source("69bbis", src, h, n, _now(), sat_actualizado_al=vigencia)
     return {"source_file": src, "cached": False, "rows": n, "sat_actualizado_al": vigencia}
@@ -181,6 +251,7 @@ def _import_69_file(fname: str, force: bool) -> dict:
         return {"source_file": fname, "cached": True, "rows": None}
 
     rows = parse_69(raw, fname)
+    _verificar_frescura(fname, rows, None)
     n = db.replace_69_file(fname, rows)
     db.record_source("69", fname, h, n, _now())
     return {"source_file": fname, "cached": False, "rows": n}

@@ -98,3 +98,65 @@ def test_buscar_nombre_69b_bis(fresh_db):
     db.replace_69b_bis(pipeline.parse_69b_bis(_FIXTURE_69B_BIS.read_bytes())[0])
     res = db.buscar_nombre("bernabastos", "69bbis")
     assert res["69b_bis"] and res["69b_bis"][0]["rfc"] == "BER160621KN5"
+
+
+# ---------------------------------------------------------------------------
+# Guard de frescura: una descarga corta, vacía o vieja no pisa datos buenos.
+# ---------------------------------------------------------------------------
+
+def test_vigencia_iso_tolera_el_mes_como_lo_escriba_el_sat():
+    # el SAT mezcla mayúscula y minúscula entre archivos: "31 de Agosto" vs "31 de mayo"
+    assert pipeline._vigencia_iso("31 de Agosto de 2026") == "2026-08-31"
+    assert pipeline._vigencia_iso("31 de mayo de 2026") == "2026-05-31"
+    assert pipeline._vigencia_iso("23 de septiembre de 2026") == "2026-09-23"
+    assert pipeline._vigencia_iso("1 de enero de 2026") == "2026-01-01"
+    assert pipeline._vigencia_iso("el martes pasado") is None
+    assert pipeline._vigencia_iso(None) is None
+    # ordena como fecha, no como texto: mayo < agosto aunque "mayo" > "agosto"
+    assert pipeline._vigencia_iso("31 de mayo de 2026") < pipeline._vigencia_iso(
+        "31 de Agosto de 2026"
+    )
+
+
+def test_guard_deja_pasar_la_primera_importacion(fresh_db):
+    # sin estado previo no hay nada que proteger
+    pipeline._verificar_frescura("Listado_Completo_69-B.csv", [], None)
+
+
+def _sembrar(src: str, filas: int, vigencia: str | None) -> None:
+    db.record_source("69b", src, "hash-viejo", filas, "2026-01-01T00:00:00Z",
+                     sat_actualizado_al=vigencia)
+
+
+def test_guard_rechaza_cero_filas(fresh_db):
+    src = "Listado_Completo_69-B.csv"
+    _sembrar(src, 14837, "31 de Agosto de 2026")
+    with pytest.raises(pipeline.ImportacionSospechosa, match="0 filas"):
+        pipeline._verificar_frescura(src, [], "31 de Agosto de 2026")
+
+
+def test_guard_rechaza_merma_grande_y_acepta_la_chica(fresh_db):
+    src = "Firmes.csv"
+    _sembrar(src, 1000, None)
+    with pytest.raises(pipeline.ImportacionSospechosa, match="merma"):
+        pipeline._verificar_frescura(src, [{}] * 800, None)      # -20%
+    pipeline._verificar_frescura(src, [{}] * 950, None)          # -5%, normal
+    pipeline._verificar_frescura(src, [{}] * 1200, None)         # crecer siempre pasa
+
+
+def test_guard_rechaza_vigencia_que_retrocede(fresh_db):
+    src = "Listado_Completo_69-B.csv"
+    _sembrar(src, 100, "31 de Agosto de 2026")
+    with pytest.raises(pipeline.ImportacionSospechosa, match="anterior a"):
+        pipeline._verificar_frescura(src, [{}] * 100, "31 de mayo de 2026")
+    pipeline._verificar_frescura(src, [{}] * 100, "23 de septiembre de 2026")
+
+
+def test_guard_no_estorba_a_una_lista_diminuta(fresh_db):
+    # el 69-B Bis nacional son 3 filas: un MIN_FILAS absoluto la habría bloqueado
+    src = "Listado_69_B_Bis_Completo.csv"
+    _sembrar(src, 3, "23 de septiembre de 2026")
+    pipeline._verificar_frescura(src, [{}] * 3, "23 de septiembre de 2026")
+    pipeline._verificar_frescura(src, [{}] * 4, "30 de septiembre de 2026")
+    with pytest.raises(pipeline.ImportacionSospechosa):
+        pipeline._verificar_frescura(src, [], "23 de septiembre de 2026")

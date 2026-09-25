@@ -293,6 +293,22 @@ def get_source_hash(source_file: str) -> str | None:
         return row["sha256"] if row else None
 
 
+def get_source_state(source_file: str) -> dict | None:
+    """Lo que dejó la última importación buena: filas y vigencia declarada.
+
+    `None` si el archivo nunca se importó — ahí no hay nada que proteger y el
+    guard de frescura de `pipeline` deja pasar la primera carga.
+    """
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT rows, sat_actualizado_al FROM source_files WHERE source_file = ?",
+            (source_file,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {"rows": row["rows"], "sat_actualizado_al": row["sat_actualizado_al"]}
+
+
 # ---------------------------------------------------------------------------
 # Consulta
 # ---------------------------------------------------------------------------
