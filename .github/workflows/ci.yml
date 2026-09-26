@@ -1,0 +1,25 @@
+name: ci
+
+# Portado del oráculo (edbror/watr-software-oracle), con dos diferencias:
+#   - aquí las pruebas son pytest, no demos con assert;
+#   - NO se corre `ruff format --check`. Este repo nunca se formateó con ruff y
+#     el checker reformatearía 16 de 19 archivos: adoptar el formateador es un
+#     cambio cosmético aparte, no algo que deba colarse en el gate.
+#
+# Nada aquí toca la red ni necesita secrets: las pruebas van contra fixtures en
+# memoria y SQLite temporal (verificado corriendo la suite con el entorno limpio).
+# Si algún día una prueba necesita una llave, va en un job aparte — el gate tiene
+# que seguir corriendo en un fork sin acceso a los secrets.
+
+on: [pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13" }
+      - run: pip install --upgrade pip && pip install ".[dev]"
+      - run: ruff check .
+      - run: pytest -q
