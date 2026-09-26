@@ -13,7 +13,6 @@ workflow abre un issue). Si no, `NOT_FOUND`.
 """
 from __future__ import annotations
 
-import sys
 import urllib.request
 
 # Rutas candidatas, calcadas del patrón real del 69-B Bis, que vive en el blob

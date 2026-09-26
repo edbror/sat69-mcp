@@ -11,7 +11,9 @@ CSV_69B = (
     "Informacion actualizada al 31 de diciembre de 2025; nota.\n"
     "Listado completo de contribuyentes (Articulo 69-B del CFF),\n"
     "No,RFC,Nombre,Situacion,c4,c5,c6,c7,c8,c9,c10,c11,c12,c13,c14,c15,c16,c17,c18,c19\n"
-    "1,AAA080808HL8,EMPRESA DEMO SA DE CV,Definitivo,of,01/06/2018,of,25/06/2018,,,,,ofd,27/09/2018,ofd,28/09/2018,,,,\n"
+    # una sola fila de 20 columnas, partida para no pasar de 100 caracteres
+    "1,AAA080808HL8,EMPRESA DEMO SA DE CV,Definitivo,of,01/06/2018,of,25/06/2018,"
+    ",,,,ofd,27/09/2018,ofd,28/09/2018,,,,\n"
 ).encode("latin-1")
 
 # CSV 69 mínimo: encabezado + 1 fila (6 columnas).
