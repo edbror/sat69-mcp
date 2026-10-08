@@ -28,7 +28,7 @@ Hoy lo consume `sat-defensa` para acotar la rama según la situación del RFC.
 | | |
 |---|---|
 | **Madurez** | **terminado** y **en uso**. Cero pendientes en su PLAN, a propósito. |
-| **Quién paga** | Nadie directamente. Hubo secuencia de lanzamiento en agosto —blog, WhatsApp B2B, lista de espera, freemium, suscripción— que registra ejecución, no adopción. |
+| **Quién paga** | **Nadie, y nadie se registró.** Confirmado con Ed el 2026-10-08: la secuencia de lanzamiento de agosto —blog, WhatsApp B2B, lista de espera, freemium, suscripción— se ejecutó completa y no produjo ni un registro. No es que falte medir: se midió y dio cero. |
 | **De qué depende** | Los archivos públicos del SAT. Turso para persistir. |
 | **Qué depende de él** | **sat-defensa** lo consulta para acotar la rama. **repse** se cruza con él desde el 11-ago (su Fase 3). |
 
