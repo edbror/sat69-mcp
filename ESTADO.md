@@ -18,6 +18,20 @@ una pregunta, una respuesta, para que otro la consuma.
 Compras, alta de proveedores, due diligence, cuentas por pagar — y agentes.
 Hoy lo consume `sat-defensa` para acotar la rama según la situación del RFC.
 
+## Madurez, quién paga y de qué depende
+
+> Escala común a los siete proyectos, para que se puedan comparar:
+> **idea** (spec sin código) · **cimiento** (corre, no le sirve a nadie aún) ·
+> **usable** (alguien podría usarlo hoy) · **en uso** (alguien lo usa de verdad) ·
+> **terminado** (hace lo que prometió; no crece salvo que el uso lo pida).
+
+| | |
+|---|---|
+| **Madurez** | **terminado** y **en uso**. Cero pendientes en su PLAN, a propósito. |
+| **Quién paga** | Nadie directamente. Hubo secuencia de lanzamiento en agosto —blog, WhatsApp B2B, lista de espera, freemium, suscripción— que registra ejecución, no adopción. |
+| **De qué depende** | Los archivos públicos del SAT. Turso para persistir. |
+| **Qué depende de él** | **sat-defensa** lo consulta para acotar la rama. **repse** se cruza con él desde el 11-ago (su Fase 3). |
+
 ## Dónde vive
 
 - Repo: `edbror/sat69-mcp` · local: `~/mcp-servers/sat69-mcp`
