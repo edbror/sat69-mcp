@@ -27,8 +27,9 @@ def evaluar(
     supuestos_69: list[str],
     situaciones_69b: list[str],
     situaciones_69b_bis: list[str] | None = None,
+    supuestos_csd: list[str] | None = None,
 ) -> tuple[str, str]:
-    """Determina (riesgo, veredicto) priorizando 69-B > 69-B Bis > 69.
+    """Determina (riesgo, veredicto) priorizando 69-B > 69-B Bis ≈ CSD > 69.
 
     riesgo ∈ {CRITICO, ALTO, MEDIO, BAJO, INFORMATIVO, LIMPIO}
     """
@@ -71,7 +72,18 @@ def evaluar(
                     "Art. 69-B Bis: excluido (sentencia favorable / desvirtuó). "
                     "Conserva el soporte de la operación.")
 
-    # 3) 69: situación fiscal firme.
+    # 3) CSD sin efectos (Art. 17-H CFF): el certificado de sello digital fue
+    # dejado sin efectos → hoy NO puede emitir CFDI válidos. Señal operativa
+    # presente y relevante, pero reversible (puede regularizarse) y no invalida
+    # por sí sola los CFDI previos como el 69-B EFOS → topa en MEDIO.
+    if supuestos_csd:
+        return ("MEDIO",
+                "Su Certificado de Sello Digital (CSD) fue dejado SIN EFECTOS por el "
+                "SAT (Art. 17-H del CFF). Hoy no puede emitir CFDI válidos; verifica "
+                "su situación antes de contratar o pagar. Es reversible (puede "
+                "regularizarse) y no invalida por sí solo los CFDI previos.")
+
+    # 4) 69: situación fiscal firme.
     if supuestos_69:
         up = sorted({(x or "").upper() for x in supuestos_69})
         for s in up:
@@ -84,7 +96,7 @@ def evaluar(
                 f"Aparece en el listado del Art. 69 ({', '.join(up)}). "
                 "Registro de carácter informativo (p. ej. créditos cancelados/condonados).")
 
-    # 4) Sin coincidencias.
+    # 5) Sin coincidencias.
     return ("LIMPIO",
-            "No aparece en las listas del Art. 69, 69-B ni 69-B Bis del CFF a la "
-            "fecha de los datos.")
+            "No aparece en las listas del Art. 69, 69-B, 69-B Bis ni en CSD sin "
+            "efectos (Art. 17-H) del CFF a la fecha de los datos.")

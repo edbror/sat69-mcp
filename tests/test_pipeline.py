@@ -102,6 +102,39 @@ def test_buscar_nombre_69b_bis(fresh_db):
     assert res["69b_bis"] and res["69b_bis"][0]["rfc"] == "BER160621KN5"
 
 
+# --- CSD sin efectos: parseo contra el archivo real del SAT (fixture) --------
+_FIXTURE_CSD = Path(__file__).parent / "fixtures" / "csd_sample.csv"
+
+
+def test_parse_csd_fixture_real():
+    rows, vigencia = pipeline.parse_csd(_FIXTURE_CSD.read_bytes())
+    assert vigencia is None            # el archivo del SAT no trae nota de vigencia
+    assert len(rows) == 3
+    por_rfc = {r["rfc"]: r for r in rows}
+    assert por_rfc["GTM870825HA7"]["supuesto"] == "FRACCIÓN X"
+    assert por_rfc["GTM870825HA7"]["fecha_cancelacion"] == "2024-01-05"
+    assert por_rfc["GTM870825HA7"]["fecha_publicacion"] == "2024-07-23"
+    # la fila con coma entrecomillada se parsea como un solo campo (CSV real, no split)
+    assert por_rfc["AAA1210097V4"]["nombre"] == "AQUO, ABOGADOS ASOCIADOS SC"
+
+
+def test_carga_y_veredicto_csd(fresh_db):
+    rows, _ = pipeline.parse_csd(_FIXTURE_CSD.read_bytes())
+    db.replace_csd(rows)
+
+    r = db.verificar_rfc("gtm870825ha7")            # CSD sin efectos
+    assert r["riesgo"] == "MEDIO"
+    assert r["en_csd"] is True
+    assert r["en_69b"] is False
+    assert r["registros_csd"][0]["supuesto"] == "FRACCIÓN X"
+
+
+def test_buscar_nombre_csd(fresh_db):
+    db.replace_csd(pipeline.parse_csd(_FIXTURE_CSD.read_bytes())[0])
+    res = db.buscar_nombre("aquo", "csd")
+    assert res["csd"] and res["csd"][0]["rfc"] == "AAA1210097V4"
+
+
 # ---------------------------------------------------------------------------
 # Guard de frescura: una descarga corta, vacía o vieja no pisa datos buenos.
 # ---------------------------------------------------------------------------

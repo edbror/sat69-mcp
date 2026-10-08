@@ -7,6 +7,10 @@
   - Fuente: CSV Latin-1 del SAT (archivo `Listado_69_B_Bis_Completo`, se descarga como `.xls` pero es CSV).
   - Activación: setear `SAT_URL_69B_BIS` (env / GitHub Secret). Vacío = se omite (feature-flag).
   - Severidad tope: **MEDIO** — es señal de riesgo fiscal del contribuyente, pero no invalida por sí sola los CFDI de la contraparte (a diferencia del 69-B EFOS).
+- **CSD sin efectos** (Art. 17-H del CFF): certificados de sello digital cancelados → el contribuyente no puede emitir CFDI válidos hoy.
+  - Fuente: `omawww.sat.gob.mx/cifras_sat/Documents/CSDsinefectos.csv` (Latin-1, ~50.8k filas, 6 columnas, encabezado en línea 1). Vive en omawww (no en el blob de Azure), igual que el Art. 69.
+  - Default horneado en `config.py` (`SAT_URL_CSD`, overrideable). Sin feature-flag ni secret en el cron — es pública; así evita el trap del 69-B Bis (secret vacío que apagaba la ingesta).
+  - Severidad: **MEDIO** — señal operativa presente (no puede facturar), pero reversible y no invalida por sí sola los CFDI previos. Prioridad: 69-B > 69-B Bis ≈ CSD > 69.
 
 ## En seguimiento — Art. 49 Bis
 Nueva "lista negra" por CFDI **presuntamente falsos** (verificación exprés, máx. 24 días hábiles, con suspensión inmediata de CFDI al notificar).
@@ -26,4 +30,4 @@ Nueva "lista negra" por CFDI **presuntamente falsos** (verificación exprés, m�
 6. Landing: mover 49 Bis de "próximamente" a cobertura.
 
 ## Otras señales candidatas (no priorizadas)
-- **CSD sin efectos** (certificados de sello digital cancelados) — el SAT sí lo publica (`CSDsinefectos`). Posible novedad futura, mismo patrón.
+- *(CSD sin efectos ya se integró — ver "Cubierto hoy".)*

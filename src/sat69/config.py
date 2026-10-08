@@ -43,6 +43,18 @@ URL_69B_BIS = os.getenv(
 )
 HEADER_ROW_69B_BIS = 3
 
+# CSD sin efectos (certificados de sello digital cancelados, Art. 17-H CFF): un
+# archivo, 6 columnas, encabezado en línea 1 (header_row = 1, como el 69). Lista
+# grande (~50k). Vive en omawww (no en el blob de Azure), igual que el 69.
+# Overrideable por env por consistencia; NO lleva feature-flag ni secret en el
+# cron (es pública y horneada) — así evita el trap del 69-B Bis (secret vacío que
+# apagaba la ingesta).
+URL_CSD = os.getenv(
+    "SAT_URL_CSD",
+    "http://omawww.sat.gob.mx/cifras_sat/Documents/CSDsinefectos.csv",
+)
+HEADER_ROW_CSD = 1
+
 # 69 (situación fiscal firme): varios archivos, 6 columnas, encabezado en línea 1.
 # Estos siguen en omawww (no tienen equivalente en el blob de Azure); overrideable
 # por env por consistencia con URL_69B.
@@ -108,6 +120,8 @@ class Settings:
     header_row_69b: int = HEADER_ROW_69B
     url_69b_bis: str = URL_69B_BIS
     header_row_69b_bis: int = HEADER_ROW_69B_BIS
+    url_csd: str = URL_CSD
+    header_row_csd: int = HEADER_ROW_CSD
     base_69: str = BASE_69
     files_69: tuple[str, ...] = FILES_69
     source_encoding: str = SOURCE_ENCODING

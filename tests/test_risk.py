@@ -76,3 +76,22 @@ def test_69b_bis_manda_sobre_69():
 def test_evaluar_backcompat_sin_69b_bis():
     # La firma vieja (2 args) sigue funcionando.
     assert risk.evaluar([], [])[0] == "LIMPIO"
+
+
+def test_csd_sin_efectos_es_medio():
+    riesgo, veredicto = risk.evaluar([], [], None, ["FRACCIÓN X"])
+    assert riesgo == "MEDIO"
+    assert "CSD" in veredicto
+
+
+def test_69b_manda_sobre_csd():
+    # EFOS definitivo pesa más que un CSD cancelado.
+    riesgo, _ = risk.evaluar([], ["Definitivo"], None, ["FRACCIÓN X"])
+    assert riesgo == "CRITICO"
+
+
+def test_csd_manda_sobre_69():
+    # CSD sin efectos (MEDIO) se reporta antes que un 69 informativo, con su glosa.
+    riesgo, veredicto = risk.evaluar(["CONDONADOS"], [], None, ["FRACCIÓN X"])
+    assert riesgo == "MEDIO"
+    assert "Sello Digital" in veredicto
