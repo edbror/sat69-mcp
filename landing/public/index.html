@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SAT 69 / 69-B — Verifica proveedores contra las listas del SAT · WATR</title>
-<meta name="description" content="Servidor MCP que verifica cualquier RFC contra las listas negras del SAT (Art. 69-B EFOS, 69-B Bis pérdidas fiscales y Art. 69). Tu agente recibe un veredicto de riesgo, con las fechas de publicación en el DOF. Sin OCR, determinista, auditable.">
+<meta name="description" content="Servidor MCP que verifica cualquier RFC contra las listas negras del SAT (Art. 69-B EFOS, 69-B Bis pérdidas fiscales, Art. 69 y CSD sin efectos del Art. 17-H). Tu agente recibe un veredicto de riesgo, con las fechas de publicación en el DOF. Sin OCR, determinista, auditable.">
 <meta property="og:title" content="SAT 69 / 69-B — El checador de listas del SAT para tu agente">
 <meta property="og:description" content="Un RFC entra, un veredicto de riesgo sale: CRÍTICO…LIMPIO. Conéctalo a Claude, ChatGPT o tu app en un minuto.">
 <meta property="og:type" content="website">
@@ -162,11 +162,11 @@
   <div class="wrap">
     <div class="eyebrow">El veredicto</div>
     <h2>Seis niveles, una respuesta clara.</h2>
-    <p class="sub">Prioridad de severidad: <b>69-B (EFOS) &gt; 69-B Bis &gt; 69</b>. Si un RFC aparece en varias, gana la más severa. Tu agente recibe el nivel, el motivo y los registros de respaldo.</p>
+    <p class="sub">Prioridad de severidad: <b>69-B (EFOS) &gt; 69-B Bis &asymp; CSD sin efectos &gt; 69</b>. Si un RFC aparece en varias, gana la más severa. Tu agente recibe el nivel, el motivo y los registros de respaldo.</p>
     <div class="riesgos">
       <div class="r crit"><div class="nivel"><span class="luz"></span>CRÍTICO</div><p>EFOS definitivo. Los CFDI no son deducibles ni acreditables.</p></div>
       <div class="r alto"><div class="nivel"><span class="luz"></span>ALTO</div><p>EFOS presunto. Presunción de inexistencia; seguir hasta la resolución.</p></div>
-      <div class="r medio"><div class="nivel"><span class="luz"></span>MEDIO</div><p>Art. 69 firme/exigible/no localizado, o 69-B Bis (transmisión indebida de pérdidas).</p></div>
+      <div class="r medio"><div class="nivel"><span class="luz"></span>MEDIO</div><p>Art. 69 firme/exigible/no localizado, 69-B Bis (transmisión indebida de pérdidas) o CSD sin efectos (no puede emitir CFDI hoy).</p></div>
       <div class="r limpio"><div class="nivel"><span class="luz"></span>LIMPIO</div><p>Sin coincidencias a la fecha de los datos. También BAJO e INFORMATIVO.</p></div>
     </div>
   </div>
@@ -177,7 +177,7 @@
     <div class="eyebrow">Herramientas</div>
     <h2>Cinco tools. Todo por RFC o por nombre.</h2>
     <div class="tools">
-      <div class="tool"><code>verificar_rfc</code><p>Un RFC → veredicto de riesgo con los registros del 69, 69-B y 69-B Bis.</p></div>
+      <div class="tool"><code>verificar_rfc</code><p>Un RFC → veredicto de riesgo con los registros del 69, 69-B, 69-B Bis y CSD sin efectos.</p></div>
       <div class="tool"><code>verificar_lote</code><p>Hasta 500 RFCs (tu cartera de proveedores). Devuelve solo los hallazgos, por severidad.</p></div>
       <div class="tool"><code>buscar_nombre</code><p>Por nombre o razón social cuando no tienes el RFC. FTS5, insensible a acentos.</p></div>
       <div class="tool"><code>estado_datos</code><p>Vigencia declarada por el SAT, conteos por situación y última importación.</p></div>
@@ -193,7 +193,7 @@
     <h2>De cero a verificando, en un minuto.</h2>
     <p class="sub">Agrégalo como conector remoto en Claude, ChatGPT o tu app. Login con OAuth — sin llaves que pegar.</p>
     <div class="url">
-      <span><span class="lbl">ENDPOINT MCP</span>https://sat69-mcp.onrender.com/connect</span>
+      <span><span class="lbl">ENDPOINT MCP</span>https://sat69.watr.mx/connect</span>
     </div>
     <div class="pasos-c">
       <div class="pc"><div class="n">01</div><h3>Agrega el conector</h3><p>Pega la URL en tu cliente MCP (Claude app, Cowork, Claude Code o tu propia app).</p></div>
@@ -209,8 +209,8 @@
     <h2>Los archivos públicos del SAT, normalizados.</h2>
     <p class="sub">Descargamos los CSV oficiales, los estructuramos y los servimos consultables. Persistencia durable; se refrescan solos.</p>
     <div class="datos">
-      <div class="dato"><div class="big">~505 k</div><div class="lbl">registros indexados (69 + 69-B)</div></div>
-      <div class="dato"><div class="big">69 · 69-B · Bis</div><div class="lbl">Art. del CFF cubiertos</div></div>
+      <div class="dato"><div class="big">~555 k</div><div class="lbl">registros indexados (69 · 69-B · CSD)</div></div>
+      <div class="dato"><div class="big">4 listas</div><div class="lbl">69 · 69-B · 69-B Bis · CSD sin efectos</div></div>
       <div class="dato"><div class="big">diario</div><div class="lbl">refresco automático</div></div>
     </div>
     <p class="sub" style="margin-top:20px;opacity:.75">Próximamente: <b>Art. 49 Bis</b> (CFDI presuntamente falsos) — en seguimiento; se integra en cuanto el SAT lo publique como datos abiertos.</p>

@@ -188,6 +188,33 @@ def parse_69b_bis(raw: bytes) -> tuple[list[dict], str | None]:
     return out, vigencia
 
 
+def parse_csd(raw: bytes) -> tuple[list[dict], str | None]:
+    """Parsea el CSV de CSD sin efectos (Art. 17-H CFF).
+
+    6 columnas, encabezado en línea 1 (header_row = 1): RFC, nombre, supuesto de
+    cancelación, fecha de cancelación, administración responsable, fecha de
+    publicación. No trae nota de vigencia → (filas, None).
+    """
+    rows = _rows_from_bytes(raw)
+    out: list[dict] = []
+    now = _now()
+    import json
+    for line in rows[settings.header_row_csd:]:  # salta encabezado
+        if len(line) < 6 or not (line[0] or "").strip():
+            continue
+        out.append({
+            "rfc": (line[0] or "").strip().upper(),
+            "nombre": " ".join((line[1] or "").split()) or None,
+            "supuesto": (line[2] or "").strip() or None,
+            "fecha_cancelacion": _fecha(line[3]),
+            "admon_responsable": (line[4] or "").strip() or None,
+            "fecha_publicacion": _fecha(line[5]),
+            "datos": json.dumps(line, ensure_ascii=False),
+            "imported_at": now,
+        })
+    return out, None
+
+
 def parse_69(raw: bytes, source_file: str) -> list[dict]:
     """Parsea un CSV del 69 (6 columnas, encabezado en línea 1)."""
     rows = _rows_from_bytes(raw)
@@ -243,6 +270,20 @@ def _import_69b_bis(force: bool) -> dict:
     return {"source_file": src, "cached": False, "rows": n, "sat_actualizado_al": vigencia}
 
 
+def _import_csd(force: bool) -> dict:
+    src = "CSDsinefectos.csv"
+    raw = fetch_csv(settings.url_csd)
+    h = sha256(raw)
+    if not force and db.get_source_hash(src) == h:
+        return {"source_file": src, "cached": True, "rows": None}
+
+    rows, vigencia = parse_csd(raw)
+    _verificar_frescura(src, rows, vigencia)
+    n = db.replace_csd(rows)
+    db.record_source("csd", src, h, n, _now(), sat_actualizado_al=vigencia)
+    return {"source_file": src, "cached": False, "rows": n, "sat_actualizado_al": vigencia}
+
+
 def _import_69_file(fname: str, force: bool) -> dict:
     url = settings.base_69.rstrip("/") + "/" + fname
     raw = fetch_csv(url)
@@ -260,7 +301,7 @@ def _import_69_file(fname: str, force: bool) -> dict:
 def process_import(dataset: str = "all", force_refresh: bool = False) -> dict:
     """Descarga y sincroniza los listados del SAT.
 
-    dataset: 'all' | '69' | '69b' | '69bbis'
+    dataset: 'all' | '69' | '69b' | '69bbis' | 'csd'
     Idempotente por hash de archivo (salvo force_refresh).
     """
     dataset = (dataset or "all").lower().replace("69b_bis", "69bbis")
@@ -281,6 +322,13 @@ def process_import(dataset: str = "all", force_refresh: bool = False) -> dict:
             except Exception as exc:  # noqa: BLE001
                 logger.error("69-B Bis falló: %s", exc)
                 errores.append({"source_file": "Listado_69_B_Bis_Completo.csv", "error": str(exc)})
+
+        if dataset in ("all", "csd"):
+            try:
+                resultados.append(_import_csd(force_refresh))
+            except Exception as exc:  # noqa: BLE001
+                logger.error("CSD sin efectos falló: %s", exc)
+                errores.append({"source_file": "CSDsinefectos.csv", "error": str(exc)})
 
         if dataset in ("all", "69"):
             for fname in settings.files_69:
