@@ -144,3 +144,81 @@ def test_sin_rfc_es_400(app, monkeypatch):
     _datos(monkeypatch)
     with TestClient(app) as client:
         assert _get(client, params="", headers=_auth()).status_code == 400
+
+
+# --- Lote ---
+
+
+def _lote(client, rfcs, headers=None):
+    return client.post("/verificar-lote", json={"rfcs": rfcs}, headers=headers or _auth())
+
+
+def test_el_lote_devuelve_TODOS_no_solo_los_hallazgos(app, monkeypatch):
+    """La diferencia deliberada con la tool `verificar_lote` del MCP, que devuelve
+    sólo coincidencias. Esto le habla a un expediente de defensa: "lo verifiqué y no
+    apareció" ES evidencia de diligencia y tiene que quedar registrada. Omitir los
+    limpios es omitir la mitad de la prueba."""
+    import sat69.database
+
+    monkeypatch.setattr(sat69.database, "estado_datos", lambda: ESTADO_OK)
+    monkeypatch.setattr(
+        sat69.database,
+        "verificar_rfc",
+        lambda rfc: {"rfc": rfc, "riesgo": "CRITICO" if rfc.startswith("MAL") else "LIMPIO"},
+    )
+    with TestClient(app) as client:
+        r = _lote(client, ["MAL010101AAA", "BIEN020202BBB", "BIEN030303CCC"])
+    assert r.status_code == 200, r.text
+    res = r.json()["resultados"]
+    assert set(res) == {"MAL010101AAA", "BIEN020202BBB", "BIEN030303CCC"}
+    assert res["BIEN020202BBB"]["riesgo"] == "LIMPIO", "el limpio tiene que venir"
+    assert res["MAL010101AAA"]["riesgo"] == "CRITICO"
+
+
+def test_cada_resultado_del_lote_trae_la_vigencia(app, monkeypatch):
+    """Contra qué corte del SAT se verificó va en cada renglón, no sólo en la
+    cabecera: cada uno se guarda como un evento aparte en la cronología."""
+    import sat69.database
+
+    monkeypatch.setattr(sat69.database, "estado_datos", lambda: ESTADO_OK)
+    monkeypatch.setattr(
+        sat69.database, "verificar_rfc", lambda rfc: {"rfc": rfc, "riesgo": "LIMPIO"}
+    )
+    with TestClient(app) as client:
+        b = _lote(client, ["AAA010101AAA"]).json()
+    assert b["sat_actualizado_al"] == "2026-08-31"
+    assert b["resultados"]["AAA010101AAA"]["sat_actualizado_al"] == "2026-08-31"
+
+
+def test_el_lote_respeta_el_tope(app, monkeypatch):
+    import sat69.database
+
+    monkeypatch.setattr(sat69.database, "estado_datos", lambda: ESTADO_OK)
+    with TestClient(app) as client:
+        r = _lote(client, [f"RFC{i:09d}" for i in range(501)])
+    assert r.status_code == 400
+    assert "500" in r.json()["error"]
+
+
+def test_el_lote_sin_bearer_no_pasa(app_oauth):
+    with TestClient(app_oauth) as client:
+        assert client.post("/verificar-lote", json={"rfcs": ["AAA010101AAA"]}).status_code == 401
+
+
+def test_el_lote_tambien_es_503_con_el_indice_vacio(app, monkeypatch):
+    """Mismo guardia que la ruta individual: sin datos del 69-B, `verificar_rfc`
+    diría LIMPIO de los 1,641 proveedores de golpe."""
+    import sat69.database
+
+    monkeypatch.setattr(sat69.database, "estado_datos", lambda: {"status": "no_data"})
+    with TestClient(app) as client:
+        assert _lote(client, ["AAA010101AAA"]).status_code == 503
+
+
+def test_el_lote_pide_la_lista(app, monkeypatch):
+    import sat69.database
+
+    monkeypatch.setattr(sat69.database, "estado_datos", lambda: ESTADO_OK)
+    with TestClient(app) as client:
+        assert client.post("/verificar-lote", json={}, headers=_auth()).status_code == 400
+        assert client.post("/verificar-lote", json={"rfcs": []}, headers=_auth()).status_code == 400
