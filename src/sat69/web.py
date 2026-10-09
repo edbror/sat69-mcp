@@ -8,6 +8,7 @@ Envuelve el servidor FastMCP con:
   • /health (sin auth) para los health checks de Render.
   • /verificar (bearer siempre) — el mismo veredicto que la tool, en REST plano,
     para backends que no hablan MCP.
+  • /verificar-lote (bearer siempre) — hasta 500 RFC por llamada.
 
 Arranque:
     python -m sat69.web   |   sat69-web
@@ -37,7 +38,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
     """Bearer estático (MCP_API_KEY) selectivo por ruta.
 
     - /health          → siempre abierto.
-    - /refresh,/reload,/verificar → siempre exigen el Bearer (máquina-a-máquina).
+    - /refresh,/reload,/verificar,/verificar-lote → siempre Bearer (máquina-a-máquina).
     - /mcp y metadata OAuth:
         · OAuth ON  → pasa (FastMCP/AuthKit maneja la auth de /mcp).
         · OAuth OFF → exige el Bearer estático.
@@ -47,7 +48,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
     def _needs_static_bearer(self, path: str) -> bool:
         if path == "/health":
             return False
-        if path in ("/refresh", "/reload", "/verificar"):
+        if path in ("/refresh", "/reload", "/verificar", "/verificar-lote"):
             return True
         return not settings.oauth_enabled
 
@@ -129,6 +130,90 @@ async def _refresh(request: Request) -> JSONResponse:
     return JSONResponse(result, status_code=200 if result.get("success") else 502)
 
 
+MAX_LOTE = 500
+
+
+async def _indice_listo():
+    """Devuelve (estado, None) si hay datos del 69-B, o (None, respuesta 503).
+
+    Si la tabla del 69-B está vacía —arranque en frío, pull de Turso a medias,
+    ingesta fallida— `verificar_rfc` devolvería LIMPIO para todo RFC del mundo, y
+    quien llame lo guardaría como "verificado, sin hallazgos". Eso certifica como
+    limpio a un EFOS definitivo.
+
+    Ojo con el matiz: `estado_datos()` sólo dice `no_data` cuando las TRES tablas
+    están vacías. Aquí se checa el 69-B por separado, porque es la lista que decide.
+    """
+    from starlette.concurrency import run_in_threadpool
+
+    from . import database as db
+
+    estado = await run_in_threadpool(db.estado_datos)
+    if estado.get("status") != "ok" or not (estado.get("art_69b") or {}).get("total_registros"):
+        return None, JSONResponse(
+            {
+                "error": "Índice sin datos del 69-B; no se puede emitir veredicto.",
+                "status": estado.get("status"),
+            },
+            status_code=503,
+        )
+    return estado, None
+
+
+async def _verificar_lote(request: Request) -> JSONResponse:
+    """Veredicto de hasta 500 RFC en una llamada.
+
+    Nace de MATERIA (WE-514): monitorear 1,641 proveedores de uno en uno son 1,641
+    peticiones HTTP, medidas en ~2.5 s cada una — 68 minutos por barrido, y el cron
+    se corta a los 5. Por lote son 4 llamadas.
+
+    **Devuelve TODOS los RFC, no sólo los hallazgos**, a diferencia de la tool
+    `verificar_lote` del MCP. Es deliberado: la tool le habla a un modelo, que quiere
+    la señal; esto le habla a un expediente de defensa, donde "lo verifiqué y no
+    apareció" es evidencia de diligencia y tiene que quedar registrado con su fecha.
+    Omitir los limpios sería omitir la mitad de la prueba.
+    """
+    from starlette.concurrency import run_in_threadpool
+
+    from . import database as db
+
+    try:
+        cuerpo = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Se espera un JSON con la clave `rfcs`."}, status_code=400)
+
+    rfcs = cuerpo.get("rfcs") if isinstance(cuerpo, dict) else None
+    if not isinstance(rfcs, list) or not rfcs:
+        return JSONResponse({"error": "Falta la lista `rfcs`."}, status_code=400)
+    if len(rfcs) > MAX_LOTE:
+        return JSONResponse(
+            {"error": f"Máximo {MAX_LOTE} RFC por lote; llegaron {len(rfcs)}."},
+            status_code=400,
+        )
+
+    estado, error = await _indice_listo()
+    if error is not None:
+        return error
+
+    vigencia = (estado.get("art_69b") or {}).get("sat_actualizado_al")
+
+    def _todos() -> dict:
+        salida = {}
+        for rfc in rfcs:
+            r = db.verificar_rfc(str(rfc))
+            r["sat_actualizado_al"] = vigencia
+            salida[str(rfc)] = r
+        return salida
+
+    return JSONResponse(
+        {
+            "total": len(rfcs),
+            "sat_actualizado_al": vigencia,
+            "resultados": await run_in_threadpool(_todos),
+        }
+    )
+
+
 async def _verificar(request: Request) -> JSONResponse:
     """Veredicto de un RFC en REST plano, para servidor-a-servidor.
 
@@ -153,16 +238,9 @@ async def _verificar(request: Request) -> JSONResponse:
     if not rfc:
         return JSONResponse({"error": "Falta el parámetro `rfc`."}, status_code=400)
 
-    estado = await run_in_threadpool(db.estado_datos)
-    registros_69b = (estado.get("art_69b") or {}).get("total_registros", 0)
-    if estado.get("status") != "ok" or not registros_69b:
-        return JSONResponse(
-            {
-                "error": "Índice sin datos del 69-B; no se puede emitir veredicto.",
-                "status": estado.get("status"),
-            },
-            status_code=503,
-        )
+    estado, error = await _indice_listo()
+    if error is not None:
+        return error
 
     resultado = await run_in_threadpool(db.verificar_rfc, rfc)
     # La vigencia del dato es parte de la evidencia: en un expediente de defensa
@@ -209,6 +287,7 @@ def create_app() -> Starlette:
         Route("/refresh", _refresh, methods=["POST"]),
         Route("/reload", _reload, methods=["POST"]),
         Route("/verificar", _verificar, methods=["GET"]),
+        Route("/verificar-lote", _verificar_lote, methods=["POST"]),
     ]
     if settings.oauth_enabled:
         routes.append(Route(
