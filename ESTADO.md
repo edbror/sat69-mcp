@@ -25,8 +25,12 @@ Hoy lo consume `sat-defensa` para acotar la rama según la situación del RFC.
 > **usable** (alguien podría usarlo hoy) · **en uso** (alguien lo usa de verdad) ·
 > **terminado** (hace lo que prometió; no crece salvo que el uso lo pida).
 
+> Papeles del portafolio: **oráculo** · **componente ligero** · **plataforma pesada** · **integrador/generador**. Definidos en
+> `gbrain/brain/02-watr-and-company/strategy/two-ecosystems-compliance-and-fiscal-defense.md`.
+
 | | |
 |---|---|
+| **Papel** | **Componente ligero.** Una pregunta, una respuesta, integrable por cualquiera — o por Ed cuando no hace falta todo el peso de CentinelIA. |
 | **Madurez** | **terminado** y **en uso**. Cero pendientes en su PLAN, a propósito. |
 | **Quién paga** | **Nadie, y nadie se ha registrado — pero nunca se puso enfrente de nadie.** Confirmado con Ed el 2026-10-08: *no se ha lanzado nada al público*. En agosto se **construyeron** los activos de lanzamiento —blog, WhatsApp B2B, lista de espera, freemium, suscripción— y ahí se quedaron. El cero no es señal de mercado: es ausencia de intento. Nadie ha dicho que no, porque a nadie se le ha preguntado. |
 | **De qué depende** | Los archivos públicos del SAT. Turso para persistir. |
