@@ -26,7 +26,7 @@ Hoy lo consume `sat-defensa` para acotar la rama según la situación del RFC.
 > **terminado** (hace lo que prometió; no crece salvo que el uso lo pida).
 
 > Papeles del portafolio: **oráculo** · **componente ligero** · **plataforma pesada** · **integrador/generador**. Definidos en
-> `gbrain/brain/02-watr-and-company/strategy/two-ecosystems-compliance-and-fiscal-defense.md`.
+> `gbrain/brain/02-watr-and-company/strategy/regtech-and-fiscal-defense-portfolio.md`.
 
 | | |
 |---|---|
