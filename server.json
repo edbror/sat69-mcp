@@ -3,7 +3,7 @@
   "name": "io.github.edbror/sat69-mcp",
   "title": "SAT69 — Listas negras del SAT (69, 69-B, 69-B Bis y CSD)",
   "description": "Verifica RFCs contra las listas del SAT (69, 69-B EFOS, 69-B Bis, CSD): veredicto de riesgo fiscal.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "repository": {
     "url": "https://github.com/edbror/sat69-mcp",
     "source": "github"
