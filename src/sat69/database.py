@@ -396,21 +396,51 @@ def get_source_state(source_file: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 _LISTAS = {
-    "Art. 69": "registros_69",
-    "Art. 69-B": "registros_69b",
-    "Art. 69-B Bis": "registros_69b_bis",
-    "CSD sin efectos": "registros_csd",
+    "Art. 69": ("registros_69", "69"),
+    "Art. 69-B": ("registros_69b", "69b"),
+    "Art. 69-B Bis": ("registros_69b_bis", "69bbis"),
+    "CSD sin efectos": ("registros_csd", "csd"),
 }
 
+# Cuánto puede faltarle a una tabla respecto de lo que `source_files` declara antes
+# de considerarla incompleta. No es cero porque el parser descarta filas sin RFC y
+# `source_files` guarda las filas insertadas, así que coinciden; el margen es para
+# no volverse quisquilloso con una diferencia de redondeo.
+_FALTANTE_MAX = 0.02
 
-def _listas_vacias() -> list[str]:
-    """Las listas sin una sola fila. Son las que NO se pueden declarar limpias."""
+
+def _listas_incompletas() -> list[str]:
+    """Las listas que no se pueden declarar limpias: vacías o a medias.
+
+    Vacía es el caso obvio. **A medias es el que de verdad muerde**, porque no se
+    ve: `push_to_turso` hace DELETE y luego INSERT por lotes, así que un `pull` que
+    cae en medio se trae un pedazo, y el servicio lo sirve como si estuviera
+    completo. Pasó dos veces en producción: el 18-oct importó 15,024 de 557,094
+    filas y el 22-oct 75,847, y las dos veces `verificar_rfc` contestó LIMPIO para
+    todo lo que faltaba, un día entero, sin que nada avisara.
+
+    El contraste está a mano: `source_files` dice cuántas filas trajo cada archivo,
+    y se replica junto con los datos. Si la tabla tiene mucho menos que eso, el
+    índice está a medias.
+    """
+    faltan = []
     with get_conn() as conn:
-        return [
-            etiqueta
-            for etiqueta, tabla in _LISTAS.items()
-            if not conn.execute(f"SELECT 1 FROM {tabla} LIMIT 1").fetchone()
-        ]
+        esperado: dict[str, int] = {}
+        for ds, n in conn.execute(
+            "SELECT dataset, COALESCE(SUM(rows), 0) FROM source_files "
+            "WHERE status = 'ok' GROUP BY dataset"
+        ):
+            esperado[ds] = n or 0
+
+        for etiqueta, (tabla, dataset) in _LISTAS.items():
+            real = conn.execute(f"SELECT COUNT(*) FROM {tabla}").fetchone()[0]
+            if not real:
+                faltan.append(etiqueta)
+                continue
+            n = esperado.get(dataset, 0)
+            if n and real < n * (1 - _FALTANTE_MAX):
+                faltan.append(f"{etiqueta} ({real:,} de {n:,} filas)")
+    return faltan
 
 
 def verificar_rfc(rfc_original: str) -> dict:
@@ -458,12 +488,12 @@ def verificar_rfc(rfc_original: str) -> dict:
     #
     # Sólo degrada el LIMPIO: un hallazgo en otra lista sigue siendo un hallazgo,
     # y ahí el veredicto ya dice algo verdadero.
-    faltantes = _listas_vacias()
+    faltantes = _listas_incompletas()
     if faltantes and riesgo == "LIMPIO":
         riesgo = "NO_VERIFICADO"
         veredicto = (
             "No se pudo emitir veredicto: "
-            f"{', '.join(faltantes)} sin datos en el índice. "
+            f"{', '.join(faltantes)} sin datos o a medias en el índice. "
             "Registra 'no verificado', nunca 'limpio'."
         )
 

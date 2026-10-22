@@ -433,3 +433,58 @@ def test_si_una_descarga_del_69_falla_no_se_purga_nada(fresh_db, monkeypatch):
     assert db.verificar_rfc("ZOM010101AA1")["en_69"] is True, (
         "se purgó la lista vieja sin haber traído la nueva"
     )
+
+
+def test_un_indice_a_medias_no_se_declara_limpio(fresh_db):
+    """El caso que de verdad muerde, porque no se ve. `push_to_turso` hace DELETE y
+    luego INSERT por lotes, así que un `pull` que cae en medio se trae un pedazo y
+    el servicio lo sirve como completo. Pasó dos veces en producción: el 18-oct
+    importó 15,024 de 557,094 filas y el 22-oct 75,847, y las dos veces
+    `verificar_rfc` contestó LIMPIO para todo lo que faltaba, sin avisar.
+
+    La tabla NO está vacía, así que el guard de vacías no lo atrapa. El contraste
+    es contra lo que `source_files` declara.
+    """
+    db.replace_69b(pipeline.parse_69b(CSV_69B)[0])
+    db.replace_69b_bis(pipeline.parse_69b_bis(_FIXTURE_69B_BIS.read_bytes())[0])
+    db.replace_csd(pipeline.parse_csd(_FIXTURE_CSD.read_bytes())[0])
+    db.replace_69_file("Firmes.csv", pipeline.parse_69(CSV_69, "Firmes.csv"))
+
+    # Con las cuentas cuadradas, un RFC fuera de las listas es LIMPIO.
+    for src, ds, n in (
+        ("Listado_Completo_69-B.csv", "69b", 1), ("Listado_69_B_Bis_Completo.csv", "69bbis", 3),
+        ("CSDsinefectos.csv", "csd", 3), ("Firmes.csv", "69", 1),
+    ):
+        db.record_source(ds, src, "h", n, "2026-10-22T00:00:00Z")
+    assert db.verificar_rfc("XAXX010101000")["riesgo"] == "LIMPIO"
+
+    # Ahora `source_files` declara 557,094 del 69 y la tabla tiene 1: pull a medias.
+    db.record_source("69", "Firmes.csv", "h", 557094, "2026-10-22T00:00:00Z")
+    r = db.verificar_rfc("XAXX010101000")
+    assert r["riesgo"] == "NO_VERIFICADO", r
+    assert any("Art. 69" in x for x in r["listas_sin_datos"]), r
+    assert "557,094" in r["veredicto"], "el veredicto dice cuánto falta"
+
+
+def test_el_margen_del_indice_tolera_una_diferencia_chica(fresh_db):
+    """El parser descarta filas sin RFC, así que real y declarado pueden no cuadrar
+    exactamente. Un 1% de diferencia no es un pull a medias; un 90% sí."""
+    db.replace_69b(pipeline.parse_69b(CSV_69B)[0])
+    db.replace_69b_bis(pipeline.parse_69b_bis(_FIXTURE_69B_BIS.read_bytes())[0])
+    db.replace_csd(pipeline.parse_csd(_FIXTURE_CSD.read_bytes())[0])
+    csv_mil = (
+        "RFC,RS,TP,SUPUESTO,FECHA,ENT\n"
+        + "".join(f"AAA{i:06d}XX1,EMPRESA,M,FIRMES,01/01/2020,JALISCO\n" for i in range(1000))
+    ).encode("latin-1")
+    db.replace_69_file("Firmes.csv", pipeline.parse_69(csv_mil, "Firmes.csv"))
+    for src, ds, n in (
+        ("Listado_Completo_69-B.csv", "69b", 1), ("Listado_69_B_Bis_Completo.csv", "69bbis", 3),
+        ("CSDsinefectos.csv", "csd", 3),
+    ):
+        db.record_source(ds, src, "h", n, "2026-10-22T00:00:00Z")
+
+    db.record_source("69", "Firmes.csv", "h", 1010, "2026-10-22T00:00:00Z")   # -1%
+    assert db.verificar_rfc("XAXX010101000")["riesgo"] == "LIMPIO"
+
+    db.record_source("69", "Firmes.csv", "h", 10000, "2026-10-22T00:00:00Z")  # -90%
+    assert db.verificar_rfc("XAXX010101000")["riesgo"] == "NO_VERIFICADO"
