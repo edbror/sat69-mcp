@@ -82,7 +82,10 @@ def _run_startup() -> None:
         pulled = pull_from_turso()
         logger.info("Pull de Turso: %d fila(s) importadas", pulled)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Pull de Turso falló (no fatal): %s", exc)
+        # No es fatal: el servicio puede servir lo que ya tenga, y `listas_incompletas`
+        # hace que el veredicto diga NO_VERIFICADO en vez de un LIMPIO falso. Pero va
+        # como error, porque arrancar con el índice a medias no es un detalle.
+        logger.error("Pull de Turso falló: el índice puede estar a medias (%s)", exc)
 
     if settings.fetch_on_startup:
         status = db.estado_datos()
@@ -269,9 +272,17 @@ async def _reload(request: Request) -> JSONResponse:
     from starlette.concurrency import run_in_threadpool
 
     from . import database as db
-    from .turso import pull_from_turso
+    from .turso import PullFallido, pull_from_turso
     logger.info("Reload solicitado: pull desde Turso")
-    imported = await run_in_threadpool(pull_from_turso)
+    try:
+        imported = await run_in_threadpool(pull_from_turso)
+    except PullFallido as exc:
+        # `success: true` sobre un pull que se cayó es cómo el índice a medias del
+        # 18-oct pasó inadvertido. El estado va igual, para ver qué quedó.
+        logger.error("Reload falló: %s", exc)
+        return JSONResponse(
+            {"success": False, "error": str(exc), "status": db.estado_datos()}, status_code=502
+        )
     return JSONResponse({"success": True, "rows_imported": imported, "status": db.estado_datos()})
 
 

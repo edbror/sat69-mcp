@@ -118,7 +118,10 @@ def _verificar_frescura(src: str, rows: list[dict], vigencia: str | None) -> Non
         else:
             raise ImportacionSospechosa(
                 f"{src}: {len(rows)} filas contra {prev_n} previas "
-                f"(merma > {MERMA_MAX:.0%}); se conserva lo anterior"
+                f"(merma > {MERMA_MAX:.0%}); se conserva lo anterior. "
+                "Si el SAT de verdad dio de baja a esa gente, o si cambió la fuente, "
+                "corre con SAT_PERMITIR_MERMA=1; antes compara los RFC, porque una "
+                "descarga truncada no trae registros nuevos y una baja real sí."
             )
 
     nueva, vieja = _vigencia_iso(vigencia), _vigencia_iso(prev["sat_actualizado_al"])
@@ -374,13 +377,20 @@ def process_import(dataset: str = "all", force_refresh: bool = False) -> dict:
                     )
                     resultados.append({"source_file": r["source_file"], "purgado": r["filas"]})
 
-        # Persistencia durable.
+        # Persistencia durable. Sólo si algo cambió: con el pull de `main()` puesto,
+        # una corrida donde todo salió de la caché deja el local igual al remoto, y
+        # pushear 580k filas para reescribirlas idénticas es gasto y una ventana más
+        # de pull parcial para quien arranque en ese momento.
+        cambio = any(not r.get("cached") for r in resultados)
         pushed = 0
-        try:
-            from .turso import push_to_turso
-            pushed = push_to_turso()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Push a Turso falló (no fatal): %s", exc)
+        if not cambio:
+            logger.info("Nada cambió — se omite el push a Turso")
+        else:
+            try:
+                from .turso import push_to_turso
+                pushed = push_to_turso()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Push a Turso falló (no fatal): %s", exc)
 
         total = sum(r.get("rows") or 0 for r in resultados if not r.get("cached"))
         return {
@@ -397,8 +407,57 @@ def process_import(dataset: str = "all", force_refresh: bool = False) -> dict:
         return {"success": False, "error": str(exc)}
 
 
+def _traer_estado_previo() -> bool:
+    """Pull desde Turso antes de importar. Devuelve si hay que forzar la ingesta.
+
+    El cron arranca con un `/tmp/sat69.db` vacío cada corrida, y eso dejaba sin
+    piso a las dos cosas que dependen del estado previo:
+
+    - **`_verificar_frescura`** toma el camino de "primera importación: no hay nada
+      que proteger", así que ninguno de sus tres guards corre nunca en producción.
+      El congelamiento de omawww habría pasado desapercibido incluso con el guard
+      del `Last-Modified` puesto.
+    - **La idempotencia por hash** no puede acertar, porque `get_source_hash`
+      siempre devuelve None. Cada corrida reimportaba y reescribía 580k filas a
+      Turso aunque el SAT no hubiera publicado nada.
+
+    Dos cosas que este pull NO puede hacer mal, y por eso las decide aquí:
+
+    1. **Si Turso está configurado y el pull truena, no se importa.** Importar
+       sobre una base vacía y luego pushear reemplazaría el remoto con una ingesta
+       que ningún guard revisó. Mejor no correr que correr a ciegas.
+    2. **Si lo que llegó está a medias, se fuerza la ingesta completa.** Con un
+       pull parcial, la caché por hash salta archivos cuyas filas locales están
+       incompletas, y el push de después escribiría ese pedazo a Turso. O sea que
+       la caché sólo se puede creer si el piso está completo.
+    """
+    from .turso import pull_from_turso
+
+    if not settings.turso_enabled:
+        logger.info("Turso no configurado — se importa sin estado previo")
+        return True
+
+    filas = pull_from_turso()  # PullFallido sube y aborta la corrida
+    if not filas:
+        logger.info("Turso vacío — se importa todo")
+        return True
+
+    incompletas = db.listas_incompletas()
+    if incompletas:
+        logger.warning(
+            "El pull trajo %d filas pero el índice quedó a medias (%s): se fuerza la "
+            "ingesta completa, porque la caché por hash saltaría archivos parciales "
+            "y el push los mandaría así a Turso.",
+            filas, ", ".join(incompletas),
+        )
+        return True
+
+    logger.info("Estado previo traído de Turso: %d filas. Los guards tienen piso.", filas)
+    return False
+
+
 def main() -> int:
-    """CLI: `python -m sat69.pipeline [--force]` — ingesta completa + push a Turso.
+    """CLI: `python -m sat69.pipeline [--force]` — pull, ingesta y push a Turso.
 
     Pensado para el cron de GitHub Actions (runner fiable, sin spin-down del free
     tier de Render). Render sólo hace pull en el arranque.
@@ -406,9 +465,18 @@ def main() -> int:
     import pathlib
     import sys
 
+    from .turso import PullFallido
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s — %(message)s")
     db.init_db(pathlib.Path(settings.db_path))
-    result = process_import("all", force_refresh="--force" in sys.argv)
+
+    try:
+        forzar = _traer_estado_previo()
+    except PullFallido as exc:
+        logger.error("No se importa nada: %s", exc)
+        return 1
+
+    result = process_import("all", force_refresh=forzar or "--force" in sys.argv)
     logger.info(
         "Resultado: %s (push Turso: %s)", result.get("message"), result.get("turso_rows_pushed")
     )
