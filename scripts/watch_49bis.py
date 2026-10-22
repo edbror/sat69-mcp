@@ -18,11 +18,16 @@ import urllib.request
 # Rutas candidatas, calcadas del patrón real del 69-B Bis, que vive en el blob
 # de Azure bajo Documents_AGGC (el 69-B main está en Documents_AGAFF). El 49 Bis,
 # cuando el SAT lo consolide, muy probablemente saldrá en AGGC con el mismo patrón
-# `Listado_49_Bis_Completo.csv`. Se prueban ambos contenedores + omawww por si acaso.
+# `Listado_49_Bis_Completo.csv`. Se prueban los tres contenedores + omawww por si acaso.
+#
+# Documents_AGR entró el 22-oct-2026: es donde publica recaudación (el Art. 69 y el
+# CSD), y el 49 Bis es un procedimiento de recaudación, así que es tan candidato
+# como AGGC. Se descubrió al migrar las fuentes del 69 y del CSD a ese contenedor.
 _AZURE = "https://wu1agsprosta001.blob.core.windows.net/agsc-publicaciones/Datos_abiertos"
 _HOSTS = [
     f"{_AZURE}/Documents_AGGC",   # ← donde vive el 69-B Bis; el candidato más fuerte
     f"{_AZURE}/Documents_AGAFF",
+    f"{_AZURE}/Documents_AGR",     # ← donde viven el Art. 69 y el CSD
     "http://omawww.sat.gob.mx/cifras_sat/Documents",
 ]
 _NAMES = [

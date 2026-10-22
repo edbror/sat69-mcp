@@ -306,6 +306,42 @@ def replace_csd(rows: list[dict]) -> int:
     return len(rows)
 
 
+def purgar_archivos_69_retirados(vigentes: tuple[str, ...]) -> list[dict]:
+    """Borra los registros del 69 cuyo archivo de origen ya no se ingiere.
+
+    `replace_69_file` reemplaza POR archivo, así que renombrar o retirar una fuente
+    deja sus filas vivas para siempre. Pasó al migrar a la fuente del blob:
+    `NoLocalizados.csv` se volvió `No_localizados.csv` y quedaron las dos, con el
+    total del 69 contando doble. Peor que el conteo: `verificar_rfc` no filtra por
+    archivo, así que un RFC que el SAT ya dio de baja seguía apareciendo desde el
+    archivo viejo. Un falso positivo sobre un contribuyente, por dato zombi.
+
+    Es caché de listas públicas del SAT, no traza: se vuelve a descargar entera.
+    """
+    marcas = ",".join("?" * len(vigentes)) or "''"
+    with get_conn() as conn:
+        retirados = [
+            dict(r) for r in conn.execute(
+                f"""
+                SELECT source_file, COUNT(*) AS filas FROM registros_69
+                WHERE source_file NOT IN ({marcas})
+                GROUP BY source_file
+                """,
+                vigentes,
+            ).fetchall()
+        ]
+        if retirados:
+            conn.execute(
+                f"DELETE FROM registros_69 WHERE source_file NOT IN ({marcas})", vigentes
+            )
+            conn.execute(
+                f"DELETE FROM source_files WHERE dataset = '69' "
+                f"AND source_file NOT IN ({marcas})",
+                vigentes,
+            )
+    return retirados
+
+
 def record_source(
     dataset: str, source_file: str, sha256: str, rows: int,
     fetched_at: str, sat_actualizado_al: str | None = None,
@@ -359,6 +395,24 @@ def get_source_state(source_file: str) -> dict | None:
 # Consulta
 # ---------------------------------------------------------------------------
 
+_LISTAS = {
+    "Art. 69": "registros_69",
+    "Art. 69-B": "registros_69b",
+    "Art. 69-B Bis": "registros_69b_bis",
+    "CSD sin efectos": "registros_csd",
+}
+
+
+def _listas_vacias() -> list[str]:
+    """Las listas sin una sola fila. Son las que NO se pueden declarar limpias."""
+    with get_conn() as conn:
+        return [
+            etiqueta
+            for etiqueta, tabla in _LISTAS.items()
+            if not conn.execute(f"SELECT 1 FROM {tabla} LIMIT 1").fetchone()
+        ]
+
+
 def verificar_rfc(rfc_original: str) -> dict:
     """Verifica un RFC contra ambas listas y devuelve el veredicto de riesgo."""
     rfc = risk.normalizar_rfc(rfc_original)
@@ -394,12 +448,32 @@ def verificar_rfc(rfc_original: str) -> dict:
         [x["situacion"] for x in r69bbis],
         [x["supuesto"] for x in rcsd],
     )
+
+    # Un veredicto no puede absolver a una lista que no se pudo consultar. Si una
+    # tabla está vacía —arranque en frío, pull de Turso a medias, ingesta que
+    # tronó— `evaluar` no encuentra nada en ella y devuelve LIMPIO con un texto
+    # que afirma haber revisado las cuatro. Eso es una constancia falsa, y es
+    # exactamente lo que pasó: con la tabla del CSD en cero, un RFC con el sello
+    # cancelado desde 2024 salía LIMPIO.
+    #
+    # Sólo degrada el LIMPIO: un hallazgo en otra lista sigue siendo un hallazgo,
+    # y ahí el veredicto ya dice algo verdadero.
+    faltantes = _listas_vacias()
+    if faltantes and riesgo == "LIMPIO":
+        riesgo = "NO_VERIFICADO"
+        veredicto = (
+            "No se pudo emitir veredicto: "
+            f"{', '.join(faltantes)} sin datos en el índice. "
+            "Registra 'no verificado', nunca 'limpio'."
+        )
+
     return {
         "rfc_consultado": rfc_original,
         "rfc": rfc,
         "rfc_valido": risk.rfc_valido(rfc),
         "riesgo": riesgo,
         "veredicto": veredicto,
+        "listas_sin_datos": faltantes,
         "en_69b": bool(r69b),
         "en_69b_bis": bool(r69bbis),
         "en_csd": bool(rcsd),

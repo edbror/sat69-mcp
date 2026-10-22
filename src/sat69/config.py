@@ -11,7 +11,7 @@ estático y Turso.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -45,27 +45,45 @@ HEADER_ROW_69B_BIS = 3
 
 # CSD sin efectos (certificados de sello digital cancelados, Art. 17-H CFF): un
 # archivo, 6 columnas, encabezado en línea 1 (header_row = 1, como el 69). Lista
-# grande (~50k). Vive en omawww (no en el blob de Azure), igual que el 69.
+# grande (~60k). Vive en el blob de Azure bajo Documents_AGR, que es la
+# administración que cancela (coincide con la columna de la lista).
 # Overrideable por env por consistencia; NO lleva feature-flag ni secret en el
 # cron (es pública y horneada) — así evita el trap del 69-B Bis (secret vacío que
 # apagaba la ingesta).
+#
+# 2026-10: estaba apuntando a omawww, que quedó CONGELADO en el corte del
+# 3-dic-2025 y seguía dando 200. Es el MISMO trap que el 69-B en julio, y aquí
+# costó 8,814 RFC con el CSD cancelado que respondíamos como limpios. La fuente
+# viva es la que linkea la propia página de datos abiertos del SAT.
 URL_CSD = os.getenv(
     "SAT_URL_CSD",
-    "http://omawww.sat.gob.mx/cifras_sat/Documents/CSDsinefectos.csv",
+    "https://wu1agsprosta001.blob.core.windows.net/agsc-publicaciones"
+    "/Datos_abiertos/Documents_AGR/CSDsinefectos.csv",
 )
 HEADER_ROW_CSD = 1
 
 # 69 (situación fiscal firme): varios archivos, 6 columnas, encabezado en línea 1.
-# Estos siguen en omawww (no tienen equivalente en el blob de Azure); overrideable
-# por env por consistencia con URL_69B.
-BASE_69 = os.getenv("SAT_BASE_69", "http://omawww.sat.gob.mx/cifras_sat/Documents/")
+# Mismo blob que el CSD y por la misma razón: en omawww estos cinco quedaron en el
+# corte del 17-ene-2026 y `NoLocalizados.csv` en el del 7-ene-2025.
+#
+# Dos diferencias de la fuente viva que hay que respetar:
+#   1. `No_localizados.csv` se llama así (guion bajo, ele minúscula). El nombre
+#      viejo da 404 en Azure.
+#   2. `Condonados.csv` NO existe: el SAT lo partió en cinco archivos (reducción
+#      art. 74, condonados 146-B, recargos art. 21, por decreto, y el histórico
+#      2007-2015). Se deja fuera hasta decidir cuáles entran, en vez de seguir
+#      importando un archivo que el SAT ya no publica. Ver ESTADO.md.
+BASE_69 = os.getenv(
+    "SAT_BASE_69",
+    "https://wu1agsprosta001.blob.core.windows.net/agsc-publicaciones"
+    "/Datos_abiertos/Documents_AGR/",
+)
 FILES_69 = (
     "Firmes.csv",
     "Cancelados.csv",
-    "NoLocalizados.csv",
+    "No_localizados.csv",
     "Exigibles.csv",
     "Sentencias.csv",
-    "Condonados.csv",
 )
 
 # Los CSV del SAT vienen en Latin-1 (ISO-8859-1).
@@ -109,6 +127,18 @@ def _build_fetch_proxy() -> str:
     country = os.getenv("DATAIMPULSE_COUNTRY", "").strip()
     label = f"{user}__cr.{country}" if country else user
     return f"http://{label}:{pwd}@{host}:{port}"
+
+
+# Campos que NUNCA se imprimen. `fetch_proxy` entra porque es una URL con la
+# contraseña embebida (`http://user:pwd@host:port`).
+_SECRETOS = frozenset({
+    "mcp_api_key",
+    "turso_token",
+    "dashscope_key",
+    "anthropic_key",
+    "gemini_key",
+    "fetch_proxy",
+})
 
 
 @dataclass(frozen=True)
@@ -168,8 +198,30 @@ class Settings:
     anthropic_key: str = os.getenv("ANTHROPIC_API_KEY", "").strip()
     gemini_key: str = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
 
+    # Escotilla de un solo uso para migrar de fuente: acepta una merma grande de
+    # filas en vez de conservar lo anterior. Fuera de una migración hay que
+    # apagarla, porque es justo el guard que atrapa una descarga truncada.
+    permitir_merma: bool = _env_bool("SAT_PERMITIR_MERMA", False)
+
     # --- Logging ---
     log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
+
+    def __repr__(self) -> str:
+        """Igual que el de dataclass pero con los secretos tapados.
+
+        El repr de un dataclass imprime TODOS los campos, así que cualquier
+        `assert settings.x == y` que falle, cualquier log de la config y cualquier
+        excepción que la arrastre publicaba las llaves en claro. Ya pasó: una
+        aserción de pytest escupió `gemini_key` completa, y los logs de CI son
+        públicos para quien tenga el repo.
+        """
+        partes = []
+        for campo in fields(self):
+            valor = getattr(self, campo.name)
+            if campo.name in _SECRETOS and valor:
+                valor = f"<{campo.name} presente, {len(str(valor))} chars>"
+            partes.append(f"{campo.name}={valor!r}")
+        return f"{type(self).__name__}({', '.join(partes)})"
 
     @property
     def turso_enabled(self) -> bool:

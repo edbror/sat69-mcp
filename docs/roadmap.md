@@ -8,7 +8,7 @@
   - Activación: setear `SAT_URL_69B_BIS` (env / GitHub Secret). Vacío = se omite (feature-flag).
   - Severidad tope: **MEDIO** — es señal de riesgo fiscal del contribuyente, pero no invalida por sí sola los CFDI de la contraparte (a diferencia del 69-B EFOS).
 - **CSD sin efectos** (Art. 17-H del CFF): certificados de sello digital cancelados → el contribuyente no puede emitir CFDI válidos hoy.
-  - Fuente: `omawww.sat.gob.mx/cifras_sat/Documents/CSDsinefectos.csv` (Latin-1, ~50.8k filas, 6 columnas, encabezado en línea 1). Vive en omawww (no en el blob de Azure), igual que el Art. 69.
+  - Fuente: `…/Datos_abiertos/Documents_AGR/CSDsinefectos.csv` en el blob de Azure (Latin-1, ~59.6k filas, 6 columnas, encabezado en línea 1). **Corregido el 22-oct-2026:** esta línea decía que vivía en omawww y que el Art. 69 también. Las dos cosas eran falsas. La página de datos abiertos del SAT linkea el blob; omawww sigue respondiendo 200 con el corte del 3-dic-2025, y el Art. 69 con el del 17-ene-2026 (No localizados, con el del 7-ene-2025). El supuesto es siempre FRACCIÓN X: 59,636 de 59,636 filas.
   - Default horneado en `config.py` (`SAT_URL_CSD`, overrideable). Sin feature-flag ni secret en el cron — es pública; así evita el trap del 69-B Bis (secret vacío que apagaba la ingesta).
   - Severidad: **MEDIO** — señal operativa presente (no puede facturar), pero reversible y no invalida por sí sola los CFDI previos. Prioridad: 69-B > 69-B Bis ≈ CSD > 69.
 

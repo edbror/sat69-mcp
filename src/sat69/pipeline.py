@@ -72,7 +72,13 @@ def _vigencia_iso(v: str | None) -> str | None:
 
     El SAT escribe el mes con mayúscula inicial o sin ella, según el archivo y
     el día — por eso se compara en minúsculas y no se confía en el formato.
+
+    Acepta además una fecha ya en ISO, que es la forma en que llega la vigencia
+    del 69 y del CSD: esos archivos no traen nota, así que su vigencia es el
+    `Last-Modified` de la descarga.
     """
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", (v or "").strip()):
+        return v.strip()
     m = re.search(r"(\d{1,2})\s+de\s+([A-Za-zÁÉÍÓÚáéíóú]+)\s+de\s+(\d{4})", v or "")
     if not m:
         return None
@@ -94,10 +100,26 @@ def _verificar_frescura(src: str, rows: list[dict], vigencia: str | None) -> Non
             f"{src}: 0 filas y había {prev_n}; se conserva lo anterior"
         )
     if prev_n and len(rows) < prev_n * (1 - MERMA_MAX):
-        raise ImportacionSospechosa(
-            f"{src}: {len(rows)} filas contra {prev_n} previas "
-            f"(merma > {MERMA_MAX:.0%}); se conserva lo anterior"
-        )
+        # La merma protege contra una descarga truncada que pisaría datos buenos.
+        # Hay un caso donde el aviso es legítimo y no hay forma de que el código lo
+        # sepa: una MIGRACIÓN DE FUENTE, donde lo previo venía de un archivo
+        # congelado. Pasó con `Exigibles.csv` al salir de omawww: 2,747 filas contra
+        # 5,535, y verificando a mano resultó que 691 RFC eran nuevos y 3,479 se
+        # habían dado de baja. Una descarga truncada no trae registros nuevos.
+        #
+        # Así que la salida es una decisión de operador, explícita y ruidosa, no un
+        # umbral más flojo: `SAT_PERMITIR_MERMA=1` para la corrida de la migración.
+        if settings.permitir_merma:
+            logger.warning(
+                "%s: merma de %d a %d filas ACEPTADA por SAT_PERMITIR_MERMA. "
+                "Si no estás migrando de fuente, apágala: tapa descargas truncadas.",
+                src, prev_n, len(rows),
+            )
+        else:
+            raise ImportacionSospechosa(
+                f"{src}: {len(rows)} filas contra {prev_n} previas "
+                f"(merma > {MERMA_MAX:.0%}); se conserva lo anterior"
+            )
 
     nueva, vieja = _vigencia_iso(vigencia), _vigencia_iso(prev["sat_actualizado_al"])
     if nueva and vieja and nueva < vieja:
@@ -241,13 +263,14 @@ def parse_69(raw: bytes, source_file: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def _import_69b(force: bool) -> dict:
-    raw = fetch_csv(settings.url_69b)
+    raw, modificado = fetch_csv(settings.url_69b)
     h = sha256(raw)
     src = "Listado_Completo_69-B.csv"
     if not force and db.get_source_hash(src) == h:
         return {"source_file": src, "cached": True, "rows": None}
 
     rows, vigencia = parse_69b(raw)
+    vigencia = vigencia or modificado
     _verificar_frescura(src, rows, vigencia)
     n = db.replace_69b(rows)
     db.record_source("69b", src, h, n, _now(), sat_actualizado_al=vigencia)
@@ -258,12 +281,13 @@ def _import_69b_bis(force: bool) -> dict:
     src = "Listado_69_B_Bis_Completo.csv"
     if not settings.url_69b_bis:  # feature-flag: sin URL configurada, se omite
         return {"source_file": src, "skipped": "SAT_URL_69B_BIS no configurada"}
-    raw = fetch_csv(settings.url_69b_bis)
+    raw, modificado = fetch_csv(settings.url_69b_bis)
     h = sha256(raw)
     if not force and db.get_source_hash(src) == h:
         return {"source_file": src, "cached": True, "rows": None}
 
     rows, vigencia = parse_69b_bis(raw)
+    vigencia = vigencia or modificado
     _verificar_frescura(src, rows, vigencia)
     n = db.replace_69b_bis(rows)
     db.record_source("69bbis", src, h, n, _now(), sat_actualizado_al=vigencia)
@@ -272,12 +296,13 @@ def _import_69b_bis(force: bool) -> dict:
 
 def _import_csd(force: bool) -> dict:
     src = "CSDsinefectos.csv"
-    raw = fetch_csv(settings.url_csd)
+    raw, modificado = fetch_csv(settings.url_csd)
     h = sha256(raw)
     if not force and db.get_source_hash(src) == h:
         return {"source_file": src, "cached": True, "rows": None}
 
     rows, vigencia = parse_csd(raw)
+    vigencia = vigencia or modificado  # el CSD no trae nota: su vigencia es el Last-Modified
     _verificar_frescura(src, rows, vigencia)
     n = db.replace_csd(rows)
     db.record_source("csd", src, h, n, _now(), sat_actualizado_al=vigencia)
@@ -286,16 +311,16 @@ def _import_csd(force: bool) -> dict:
 
 def _import_69_file(fname: str, force: bool) -> dict:
     url = settings.base_69.rstrip("/") + "/" + fname
-    raw = fetch_csv(url)
+    raw, modificado = fetch_csv(url)
     h = sha256(raw)
     if not force and db.get_source_hash(fname) == h:
         return {"source_file": fname, "cached": True, "rows": None}
 
     rows = parse_69(raw, fname)
-    _verificar_frescura(fname, rows, None)
+    _verificar_frescura(fname, rows, modificado)
     n = db.replace_69_file(fname, rows)
-    db.record_source("69", fname, h, n, _now())
-    return {"source_file": fname, "cached": False, "rows": n}
+    db.record_source("69", fname, h, n, _now(), sat_actualizado_al=modificado)
+    return {"source_file": fname, "cached": False, "rows": n, "sat_actualizado_al": modificado}
 
 
 def process_import(dataset: str = "all", force_refresh: bool = False) -> dict:
@@ -337,6 +362,17 @@ def process_import(dataset: str = "all", force_refresh: bool = False) -> dict:
                 except Exception as exc:  # noqa: BLE001
                     logger.error("69 [%s] falló: %s", fname, exc)
                     errores.append({"source_file": fname, "error": str(exc)})
+
+            # Se corre DESPUÉS de importar y sólo si no hubo errores: purgar
+            # cuando una descarga falló dejaría el 69 a medias y sin la lista
+            # vieja para responder mientras tanto.
+            if not errores:
+                for r in db.purgar_archivos_69_retirados(settings.files_69):
+                    logger.warning(
+                        "69 [%s]: %d filas de un archivo que ya no se ingiere, purgadas",
+                        r["source_file"], r["filas"],
+                    )
+                    resultados.append({"source_file": r["source_file"], "purgado": r["filas"]})
 
         # Persistencia durable.
         pushed = 0
