@@ -3,6 +3,19 @@ name: Refresh SAT 69/69-B
 # La ingesta corre en el runner de GitHub (fiable, sin spin-down del free tier),
 # descarga los CSV del SAT y hace push directo a Turso. Render sólo hace pull al
 # arrancar (FETCH_ON_STARTUP=false). Idempotente por hash (--force para forzar).
+#
+# El runner arranca con /tmp/sat69.db vacío, así que `python -m sat69.pipeline`
+# hace PRIMERO un pull de Turso. Sin ese pull no había estado previo, y sin estado
+# previo: (1) los tres guards de `_verificar_frescura` tomaban siempre el camino de
+# "primera importación" y no corrían nunca, o sea que el congelamiento de omawww
+# habría pasado igual con el guard puesto; y (2) la caché por hash no podía acertar,
+# así que cada corrida reescribía 580k filas a Turso aunque el SAT no publicara nada.
+#
+# Si el pull falla, el paso TRUENA y no se importa nada: importar sobre una base
+# vacía y pushear reemplazaría el remoto con una ingesta que ningún guard revisó.
+#
+# Un guard en rojo deja el job en rojo a propósito. El mensaje del error dice qué
+# comparar y, si la baja es real, correr una vez con SAT_PERMITIR_MERMA=1.
 
 on:
   schedule:

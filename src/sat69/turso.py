@@ -79,6 +79,10 @@ _SCHEMA_STMTS = [
         fetched_at TEXT)""",
 ]
 
+class PullFallido(RuntimeError):
+    """El pull desde Turso no terminó. El local quedó a medias."""
+
+
 _PUSH_CHUNK = 2000
 _PULL_CHUNK = 5000  # ponytail: pull por lotes; 512Mi de Render no aguanta ½M dicts de golpe
 
@@ -139,9 +143,14 @@ def pull_from_turso() -> int:
                 with db.get_conn() as conn:
                     conn.executemany(insert, [list(row) for row in res.rows])
                 total += len(res.rows)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("pull_from_turso falló: %s", exc)
-        return total
+    except Exception as exc:
+        # NO se devuelve el total parcial. Devolverlo hacía que una falla a medio
+        # pull fuera indistinguible de un pull chico y exitoso, y eso es justo lo
+        # que pasó el 18-oct: el log dijo "Importadas 15,024 filas" y el servicio
+        # sirvió el 2.7% de la lista todo el día. Quien llame decide si tolera la
+        # falla; lo que no puede es no enterarse.
+        logger.error("pull_from_turso falló tras %d filas: %s", total, exc)
+        raise PullFallido(f"pull incompleto tras {total} filas: {exc}") from exc
     finally:
         client.close()
 

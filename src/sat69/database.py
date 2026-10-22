@@ -409,7 +409,7 @@ _LISTAS = {
 _FALTANTE_MAX = 0.02
 
 
-def _listas_incompletas() -> list[str]:
+def listas_incompletas() -> list[str]:
     """Las listas que no se pueden declarar limpias: vacías o a medias.
 
     Vacía es el caso obvio. **A medias es el que de verdad muerde**, porque no se
@@ -488,7 +488,7 @@ def verificar_rfc(rfc_original: str) -> dict:
     #
     # Sólo degrada el LIMPIO: un hallazgo en otra lista sigue siendo un hallazgo,
     # y ahí el veredicto ya dice algo verdadero.
-    faltantes = _listas_incompletas()
+    faltantes = listas_incompletas()
     if faltantes and riesgo == "LIMPIO":
         riesgo = "NO_VERIFICADO"
         veredicto = (
