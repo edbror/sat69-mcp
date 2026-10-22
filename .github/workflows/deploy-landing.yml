@@ -1,0 +1,28 @@
+name: Deploy landing
+
+# Despliega el landing (Cloudflare Worker sat69-landing) al mergear a main cuando
+# cambie algo en landing/. Antes era wrangler deploy a mano, y el sitio en vivo se
+# quedaba atrás del repo (la 4ª lista estuvo mergeada días sin desplegar). Mismo
+# comando que el deploy manual: npx wrangler deploy. Requiere el secret
+# CLOUDFLARE_API_TOKEN (scope Edit Workers); el account_id vive en wrangler.toml.
+
+on:
+  push:
+    branches: [main]
+    paths: ["landing/**"]
+  workflow_dispatch:   # permite dispararlo a mano desde la pestaña Actions
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: landing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npx --yes wrangler@4 deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
