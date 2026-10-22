@@ -1,6 +1,7 @@
 # ESTADO — sat69-mcp
 
-> Medido el 2026-10-08 contra disco, GitHub y la API de Render.
+> Medido el 2026-10-08 contra disco, GitHub y la API de Render. Los dos pendientes
+> de "Qué lo bloquea" se midieron el 2026-10-22.
 > **Lo de abajo caduca.** Si esta fecha ya está vieja, no te creas el contenido:
 > vuelve a medirlo con los comandos del final.
 
@@ -54,7 +55,34 @@ importación fallida.
 
 ## Qué lo bloquea
 
-Nada. Es de los pocos del portafolio que está terminado para lo que hace.
+Nada para lo que hace hoy. Quedan dos cosas medidas el 22-oct-2026 que valen
+anotarse, ninguna de las dos bloqueante.
+
+**1. El servicio sirve el corte del ciclo anterior, y necesita un secret.** El
+servicio hace su único pull de Turso al arrancar, a las 11:30 UTC cuando lo
+despierta el cron de Render. El scheduler de GitHub Actions llega tarde por horas
+(las últimas diez corridas agendadas para las 11:30 arrancaron entre las 14:18 y
+las 18:25 UTC), así que la ingesta casi siempre corre DESPUÉS de ese pull y lo que
+baja del SAT no llega al índice servido hasta el día siguiente.
+
+Lo cerraría que la ingesta avise al servicio con `POST /reload`, que ya existe y
+ya hace el pull. Hace falta el secret **`MCP_API_KEY`** en este repo, con el mismo
+valor que la env var del servicio en Render; hoy sólo están los dos de Turso y el
+de Cloudflare. Mientras no esté, no se agrega la llamada: un paso que falla en
+silencio por un secret vacío es el trap que ya pagamos con `SAT_URL_69B_BIS`.
+
+**2. `push_to_turso` no es atómico.** Hace `DELETE` y luego `INSERT` por lotes de
+2,000, así que un `pull` que caiga en medio se trae un pedazo. Está contenido y no
+silencioso: el pull levanta `PullFallido` si se cae, y `listas_incompletas()` hace
+que el veredicto conteste `NO_VERIFICADO` en vez de un `LIMPIO` falso cuando el
+índice está a medias. Lo que falta para cerrarlo de raíz es que el pull escriba en
+una base de paso y haga swap al terminar, para que una lectura a medias deje el
+índice anterior completo en lugar de uno parcial.
+
+El historial de por qué esto importa: el 18-oct el servicio importó 15,024 de
+557,094 filas y pasó el día contestando con el 2.7% de la lista del Art. 69, sin
+que nada avisara, porque `pull_from_turso` devolvía el total parcial en vez de
+levantar.
 
 ## Cómo volver a medir esto
 

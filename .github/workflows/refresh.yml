@@ -17,19 +17,27 @@ name: Refresh SAT 69/69-B
 # Un guard en rojo deja el job en rojo a propósito. El mensaje del error dice qué
 # comparar y, si la baja es real, correr una vez con SAT_PERMITIR_MERMA=1.
 
-# **El horario no es libre.** El cron de Render `mcps-wake-530am` despierta los MCP
-# a las 11:30 UTC, y al arrancar el servicio hace su pull de Turso. Este workflow
-# estaba agendado a las 11:30 UTC también, o sea que el push a Turso (DELETE y
-# luego INSERT por lotes, no atómico) corría justo mientras el servicio leía.
+# **El horario nominal no choca con el despertador, y eso es casi todo lo que se
+# puede prometer.** El cron de Render `mcps-wake-530am` (repo
+# wearetherobots/watr-cloud-ops) despierta los MCP a las 11:30 UTC y al arrancar el
+# servicio hace su pull de Turso. Este workflow estaba agendado a las 11:30 UTC
+# también, o sea que el push (DELETE y luego INSERT por lotes, no atómico) quedaba
+# nominalmente encima de la lectura. Se movió a las 10:00 para quitar ese traslape.
 #
-# Eso no era un accidente raro, era un volado diario, y ya cayó mal: el 18-oct el
-# servicio importó 15,024 de 557,094 filas y pasó el día contestando con el 2.7%
-# de la lista del 69. Por eso la ingesta se corre 90 minutos ANTES del despertador:
-# cuando el servicio arranca, Turso ya está quieto. La corrida más lenta que hemos
-# medido son 6m37s, así que el margen sobra.
+# **Lo que NO arregla, medido y no supuesto:** el scheduler de GitHub Actions llega
+# tarde, y no por minutos. Las últimas diez corridas agendadas para las 11:30
+# arrancaron entre las 14:18 y las 18:25 UTC, ninguna cerca de su hora. Con esa
+# deriva el horario no garantiza separación de nada, así que la protección real es
+# la del #23 y el #24: el pull levanta si se cae, y un índice a medias contesta
+# NO_VERIFICADO en vez de LIMPIO.
 #
-# Si alguien mueve una de las dos, tiene que mover la otra. Viven en repos
-# distintos (el despertador está en wearetherobots/watr-cloud-ops).
+# **Y la consecuencia incómoda de la deriva:** el servicio despierta a las 11:30 y
+# hace su único pull ahí, horas ANTES de que esta ingesta corra. O sea que en un día
+# normal sirve el corte del ciclo anterior hasta el siguiente despertar. Cerrarlo
+# pide que la ingesta avise al servicio (`POST /reload`, que ya existe) y eso
+# necesita el secret `MCP_API_KEY` en este repo, que hoy no está. Ver ESTADO.md.
+#
+# Si alguien mueve una de las dos, tiene que mover la otra.
 on:
   schedule:
     - cron: "0 10 * * *"    # 04:00 America/Mexico_City = 10:00 UTC
