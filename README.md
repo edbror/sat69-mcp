@@ -12,7 +12,7 @@ Misma arquitectura que el MCP de movilizaciones de la SSC-CDMX: FastMCP con tran
 
 | Tool | Qué hace |
 |------|----------|
-| `verificar_rfc` | Verifica un RFC → **veredicto de riesgo** (`CRITICO`…`LIMPIO`). |
+| `verificar_rfc` | Verifica un RFC → **veredicto de riesgo** (`CRITICO`…`LIMPIO`, o `NO_VERIFICADO` si alguna lista está sin datos). |
 | `verificar_lote` | Valida hasta 500 RFCs; devuelve sólo hallazgos por severidad. |
 | `buscar_nombre` | Búsqueda por nombre/razón social (FTS5, insensible a acentos). |
 | `estado_datos` | Vigencia declarada por el SAT, conteos y última importación. |

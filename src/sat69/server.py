@@ -94,7 +94,8 @@ Servidor MCP para consultar las listas del SAT (México):
 Prioridad de severidad: 69-B (EFOS) > 69-B Bis ≈ CSD sin efectos > 69.
 
 Tools:
-1. `verificar_rfc` — un RFC → veredicto de riesgo (CRITICO…LIMPIO).
+1. `verificar_rfc` — un RFC → veredicto de riesgo (CRITICO…LIMPIO, o NO_VERIFICADO
+   si alguna lista está sin datos: nunca se declara limpio lo que no se pudo revisar).
 2. `verificar_lote` — cartera de RFCs → sólo los hallazgos, por severidad.
 3. `buscar_nombre` — por nombre/razón social cuando no se tiene el RFC.
 4. `estado_datos` — vigencia y conteos.
@@ -123,7 +124,8 @@ def verificar_rfc(rfc: str) -> dict:
         rfc: RFC a consultar (física o moral). Se normaliza automáticamente.
 
     Returns:
-        Veredicto con riesgo (CRITICO|ALTO|MEDIO|BAJO|INFORMATIVO|LIMPIO),
+        Veredicto con riesgo (CRITICO|ALTO|MEDIO|BAJO|INFORMATIVO|LIMPIO), o
+        NO_VERIFICADO con `listas_sin_datos` si alguna lista está vacía,
         explicación y los registros encontrados en cada lista (incl. 69-B Bis y CSD).
     """
     if not (rfc or "").strip():
