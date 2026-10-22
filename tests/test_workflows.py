@@ -51,11 +51,14 @@ def _schedules_utc(ruta: Path) -> list[int]:
 def test_la_ingesta_no_choca_con_el_despertador_del_servicio():
     """`push_to_turso` hace DELETE y luego INSERT por lotes, o sea que no es atómico.
     Si corre mientras el servicio arranca y hace su pull, el servicio se trae un
-    pedazo y lo sirve como completo.
+    pedazo y lo sirve como completo. Estuvieron agendados al mismo minuto.
 
-    No es un accidente raro: estuvieron agendados al mismo minuto y ya cayó mal. El
-    18-oct el servicio importó 15,024 de 557,094 filas y pasó el día contestando
-    con el 2.7% de la lista del 69.
+    **El alcance de este candado, dicho con precisión:** sólo impide el traslape
+    NOMINAL. El scheduler de GitHub llega tarde por horas —las últimas diez
+    corridas de las 11:30 arrancaron entre 14:18 y 18:25 UTC— así que el horario no
+    garantiza separación. Lo que de verdad protege es que el pull levante si se cae
+    y que un índice a medias conteste NO_VERIFICADO. Esto evita volver a poner la
+    colisión por escrito, que es poco pero no es nada.
     """
     refresh = Path(__file__).parent.parent / ".github" / "workflows" / "refresh.yml"
     horarios = _schedules_utc(refresh)
