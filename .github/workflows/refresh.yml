@@ -17,9 +17,22 @@ name: Refresh SAT 69/69-B
 # Un guard en rojo deja el job en rojo a propósito. El mensaje del error dice qué
 # comparar y, si la baja es real, correr una vez con SAT_PERMITIR_MERMA=1.
 
+# **El horario no es libre.** El cron de Render `mcps-wake-530am` despierta los MCP
+# a las 11:30 UTC, y al arrancar el servicio hace su pull de Turso. Este workflow
+# estaba agendado a las 11:30 UTC también, o sea que el push a Turso (DELETE y
+# luego INSERT por lotes, no atómico) corría justo mientras el servicio leía.
+#
+# Eso no era un accidente raro, era un volado diario, y ya cayó mal: el 18-oct el
+# servicio importó 15,024 de 557,094 filas y pasó el día contestando con el 2.7%
+# de la lista del 69. Por eso la ingesta se corre 90 minutos ANTES del despertador:
+# cuando el servicio arranca, Turso ya está quieto. La corrida más lenta que hemos
+# medido son 6m37s, así que el margen sobra.
+#
+# Si alguien mueve una de las dos, tiene que mover la otra. Viven en repos
+# distintos (el despertador está en wearetherobots/watr-cloud-ops).
 on:
   schedule:
-    - cron: "30 11 * * *"   # 05:30 America/Mexico_City ≈ 11:30 UTC
+    - cron: "0 10 * * *"    # 04:00 America/Mexico_City = 10:00 UTC
   workflow_dispatch:
     inputs:
       force:

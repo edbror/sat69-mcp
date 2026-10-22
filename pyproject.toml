@@ -25,6 +25,10 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.4",
+    # Sólo para `tests/test_workflows.py`: ni ruff ni pytest miran `.github/`, así
+    # que un YAML roto o un horario movido pasaban el CI en verde. No la usa nada
+    # del runtime.
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]
