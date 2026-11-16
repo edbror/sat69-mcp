@@ -68,3 +68,84 @@ jobs:
           # el SAT mueve la fuente, y en ese caso con un valor NO vacío.
           DB_PATH: /tmp/sat69.db
         run: python -m sat69.pipeline ${{ github.event.inputs.force == 'true' && '--force' || '' }}
+
+      # **El secret se exige, NO se omite en silencio.** El #26 declinó agregar
+      # esta llamada precisamente por esto: con `SAT_URL_69B_BIS` ya pagamos que
+      # un secret ausente se vuelva env vacía y el paso siga como si nada. Aquí
+      # un `MCP_API_KEY` vacío tiene que romper el workflow, porque la ingesta
+      # sin aviso al servicio es justo el defecto que esto arregla.
+      - name: El secret del servicio está
+        env:
+          MCP_API_KEY: ${{ secrets.MCP_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MCP_API_KEY:-}" ]; then
+            echo "::error::falta el secret MCP_API_KEY en este repo."
+            echo "Es el mismo valor que la variable MCP_API_KEY del servicio"
+            echo "sat69-mcp en Render; sin él la ingesta no puede avisarle y el"
+            echo "servicio sigue sirviendo el corte del ciclo anterior."
+            exit 1
+          fi
+          echo "ok (no se imprime el valor)"
+
+      # **Por qué existe este paso, en una línea: el servicio hace su único pull
+      # de Turso al ARRANCAR.** El cron `mcps-wake-530am` lo despierta 11:30 UTC
+      # y esta ingesta empuja alrededor de las 18:00, así que sin este aviso lo
+      # que se acaba de bajar del SAT no se sirve hasta el día siguiente. Medido
+      # el 2026-11-12: el servicio servía el corte del 4-nov con ocho corridas
+      # verdes de por medio. Es el pendiente que ESTADO.md traía anotado.
+      - name: Avisarle al servicio que recargue
+        env:
+          MCP_API_KEY: ${{ secrets.MCP_API_KEY }}
+          SERVICIO: ${{ vars.SAT69_URL || 'https://sat69-mcp.onrender.com' }}
+        run: |
+          set -euo pipefail
+          # El servicio duerme de 04:00 a 11:30 UTC por el cron de watr-cloud-ops,
+          # y arrancar frío le toma su tiempo, de ahí los reintentos largos. Un
+          # 503 aquí es "despertando", no "roto".
+          codigo=$(curl -sS -o /tmp/reload.json -w '%{http_code}' \
+            --retry 5 --retry-all-errors --retry-delay 20 --max-time 300 \
+            -X POST "$SERVICIO/reload" \
+            -H "Authorization: Bearer $MCP_API_KEY")
+          echo "POST $SERVICIO/reload -> HTTP $codigo"
+
+          if [ "$codigo" != "200" ]; then
+            # 401 merece su propio mensaje: significa que el secret de este repo
+            # y la variable del servicio dejaron de coincidir, que es lo que pasa
+            # si alguien rota una sin la otra.
+            if [ "$codigo" = "401" ]; then
+              echo "::error::401: el MCP_API_KEY de este repo NO coincide con el del servicio."
+              echo "Si rotaste uno, rota el otro: Render > sat69-mcp > Environment."
+            else
+              echo "::error::el servicio contestó $codigo al recargar"
+            fi
+            head -c 500 /tmp/reload.json || true
+            exit 1
+          fi
+
+          # Un 200 no basta: el cuerpo trae `success` y `rows_imported`, y un
+          # pull que levanta a medias puede contestar 200 con success en false.
+          python - <<'PYEOF'
+          import json, sys
+          d = json.load(open("/tmp/reload.json"))
+          if not d.get("success"):
+              print(f"::error::el servicio recargó pero reportó success={d.get('success')}")
+              sys.exit(1)
+          filas = d.get("rows_imported", 0)
+          print(f"recargadas {filas} filas en el servicio")
+          if filas < 100000:
+              # El índice completo ronda las 580 mil. Bastante menos significa
+              # que el pull quedó a medias, y `push_to_turso` todavía no es
+              # atómico (el otro pendiente de ESTADO.md), así que esta ventana
+              # existe de verdad: se midió el 2026-11-12 durante dos minutos.
+              print(f"::error::sólo {filas} filas: el índice quedó a medias")
+              sys.exit(1)
+          est = d.get("status", {})
+          for lista in ("art_69", "art_69b", "csd_sin_efectos"):
+              n = (est.get(lista) or {}).get("total_registros", 0)
+              print(f"  {lista}: {n}")
+              if n == 0:
+                  print(f"::error::{lista} quedó en cero tras recargar")
+                  sys.exit(1)
+          PYEOF
+
