@@ -75,7 +75,7 @@ jobs:
           # "(push Turso: N)"; si no empujó nada, no hay nada nuevo que recargar.
           empujadas=$(grep -oE '\(push Turso: [0-9]+\)' /tmp/ingesta.log | tail -1 | grep -oE '[0-9]+' || echo 0)
           echo "empujadas=${empujadas:-0}" >> "$GITHUB_OUTPUT"
-          echo "filas empujadas a Turso: ${empujadas:-0}
+          echo "filas empujadas a Turso: ${empujadas:-0}"
 
       # **El secret se exige, NO se omite en silencio.** El #26 declinó agregar
       # esta llamada precisamente por esto: con `SAT_URL_69B_BIS` ya pagamos que
