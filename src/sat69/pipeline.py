@@ -382,6 +382,20 @@ def process_import(dataset: str = "all", force_refresh: bool = False) -> dict:
         # pushear 580k filas para reescribirlas idénticas es gasto y una ventana más
         # de pull parcial para quien arranque en ese momento.
         cambio = any(not r.get("cached") for r in resultados)
+        # **Un push fallido NO se confunde con "no había nada que empujar".**
+        #
+        # Los dos casos dejaban `turso_rows_pushed` en 0, y desde que el workflow
+        # decide con ese número (sat69-mcp#28) eso tenía una consecuencia fea: un
+        # push roto imprimía "el SAT no publicó nada nuevo" y la corrida pasaba
+        # en VERDE, todos los días, mientras el servicio seguía sirviendo el
+        # corte viejo. El almacén durable no recibía lo que la ingesta acababa de
+        # importar y nadie se enteraba.
+        #
+        # La inferencia es segura aquí: `cambio` sólo es cierto si se importó
+        # algo, así que si hubo cambios y el push devolvió 0, falló. `push_to_turso`
+        # devuelve 0 en vez de levantar, y eso se respeta: lo que cambia es que
+        # ahora el pipeline lo cuenta como error, con lo cual `main()` sale con 1
+        # y el paso del workflow truena antes de llegar al aviso al servicio.
         pushed = 0
         if not cambio:
             logger.info("Nada cambió — se omite el push a Turso")
@@ -390,7 +404,16 @@ def process_import(dataset: str = "all", force_refresh: bool = False) -> dict:
                 from .turso import push_to_turso
                 pushed = push_to_turso()
             except Exception as exc:  # noqa: BLE001
-                logger.warning("Push a Turso falló (no fatal): %s", exc)
+                logger.error("Push a Turso falló: %s", exc)
+            if pushed == 0:
+                logger.error(
+                    "Se importaron cambios y el push a Turso no envió nada: el "
+                    "almacén durable NO tiene lo que se acaba de importar."
+                )
+                errores.append({
+                    "source_file": "(push a Turso)",
+                    "error": "el push no envió filas habiendo cambios importados",
+                })
 
         total = sum(r.get("rows") or 0 for r in resultados if not r.get("cached"))
         return {
