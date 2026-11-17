@@ -1,7 +1,8 @@
 # ESTADO — sat69-mcp
 
 > Medido el 2026-10-08 contra disco, GitHub y la API de Render. Los dos pendientes
-> de "Qué lo bloquea" se midieron el 2026-10-22.
+> de "Qué lo bloquea" se cerraron el 2026-11-16 y se volvieron a medir ese día,
+> contra el servicio vivo y contra una base con los volúmenes reales.
 > **Lo de abajo caduca.** Si esta fecha ya está vieja, no te creas el contenido:
 > vuelve a medirlo con los comandos del final.
 
@@ -47,7 +48,7 @@ Hoy lo consume `sat-defensa` para acotar la rama según la situación del RFC.
 
 Funcionando y en uso. FastMCP con stdio + Streamable HTTP, OAuth 2.1 (WorkOS
 AuthKit) con fallback a bearer estático, persistencia en Turso, despliegue en
-Render con cron de refresco por GitHub Actions. Seis archivos de prueba.
+Render con cron de refresco por GitHub Actions. Nueve archivos de prueba.
 
 Dato que confunde y está documentado: la lista del **69-B Bis tiene tres
 registros en todo el país**. Un conteo de un dígito es correcto, no una
@@ -55,34 +56,73 @@ importación fallida.
 
 ## Qué lo bloquea
 
-Nada para lo que hace hoy. Quedan dos cosas medidas el 22-oct-2026 que valen
-anotarse, ninguna de las dos bloqueante.
+Nada. Las dos cosas que estaban anotadas aquí se cerraron el 16-nov-2026 y se
+quedan escritas con su medición, porque el por qué de cada decisión es lo que
+evita que alguien la deshaga. De la segunda queda un residuo, contenido y no
+silencioso, con el motivo de no cerrarlo todavía.
 
-**1. El servicio sirve el corte del ciclo anterior, y necesita un secret.** El
-servicio hace su único pull de Turso al arrancar, a las 11:30 UTC cuando lo
-despierta el cron de Render. El scheduler de GitHub Actions llega tarde por horas
-(las últimas diez corridas agendadas para las 11:30 arrancaron entre las 14:18 y
-las 18:25 UTC), así que la ingesta casi siempre corre DESPUÉS de ese pull y lo que
-baja del SAT no llega al índice servido hasta el día siguiente.
+**1. El servicio servía el corte del ciclo anterior.**
 
-Lo cerraría que la ingesta avise al servicio con `POST /reload`, que ya existe y
-ya hace el pull. Hace falta el secret **`MCP_API_KEY`** en este repo, con el mismo
-valor que la env var del servicio en Render; hoy sólo están los dos de Turso y el
-de Cloudflare. Mientras no esté, no se agrega la llamada: un paso que falla en
-silencio por un secret vacío es el trap que ya pagamos con `SAT_URL_69B_BIS`.
+*Cerrado el 2026-11-16* con los PR #27 y #28. El servicio hacía su único pull de
+Turso al arrancar, a las 11:30 UTC cuando lo despierta el cron de Render, y la
+ingesta corre alrededor de las 18:00, así que lo que bajaba del SAT no llegaba al
+índice servido hasta el día siguiente. El 12-nov se midió sirviendo el corte del
+4-nov con ocho corridas verdes de por medio.
 
-**2. `push_to_turso` no es atómico.** Hace `DELETE` y luego `INSERT` por lotes de
-2,000, así que un `pull` que caiga en medio se trae un pedazo. Está contenido y no
-silencioso: el pull levanta `PullFallido` si se cae, y `listas_incompletas()` hace
-que el veredicto conteste `NO_VERIFICADO` en vez de un `LIMPIO` falso cuando el
-índice está a medias. Lo que falta para cerrarlo de raíz es que el pull escriba en
-una base de paso y haga swap al terminar, para que una lectura a medias deje el
-índice anterior completo en lugar de uno parcial.
+Ahora la ingesta llama a `POST /reload` al terminar. El secret `MCP_API_KEY` ya
+está en este repo, con el mismo valor que la env var del servicio en Render.
+
+Dos cosas que el paso cuida y vale no deshacer. El secret **se exige**: si viene
+vacío el workflow truena, porque un paso que falla en silencio por un secret
+vacío es el trap que ya pagamos con `SAT_URL_69B_BIS`. Y el reload **sólo corre
+si la ingesta empujó algo**: recargar sin novedades hacía al servicio re-bajar
+las ~583 mil filas para nada, y el SAT publica cada varias semanas, así que el
+caso normal es que no haya cambios.
+
+**2. El pull ya es atómico; al push le queda un residuo contenido.**
+
+*Cerrado el 2026-11-16.* `pull_from_turso` abría una conexión —y por lo tanto
+hacía un commit— por cada `DELETE` y por cada lote de 5,000, o sea que
+reconstruía **en vivo** el índice que el servicio estaba sirviendo. Ahora todo el
+reemplazo va en UNA transacción. Funciona porque `get_conn()` pone
+`journal_mode=WAL`: los lectores no se bloquean y ven el último estado
+comprometido, así que mientras el pull escribe, el servicio contesta con el
+índice anterior completo.
+
+Medido contra una base sembrada con los volúmenes reales (508,264 filas del 69 y
+60,582 del CSD, 168 MB), comparando las dos formas:
+
+| | commit por lote | una transacción |
+|---|---|---|
+| lecturas parciales de un lector concurrente | **32 de 44** | **0 de 106** |
+| lo que deja una caída en el lote 40 | 39.3% de la lista | índice anterior intacto |
+| duración | 23.1 s | 56.1 s |
+| WAL máximo | 129 MB | 177 MB |
+
+Cuesta 2.4x más y el WAL crece 48 MB; para algo que corre una vez al día y cuyo
+precio era servir datos a medias, sobra. Un `wal_checkpoint(TRUNCATE)` al
+terminar devuelve el espacio.
+
+Las dos filas de arriba son los dos tests nuevos de
+`test_pull_antes_de_importar.py`, y los dos reprueban con el código viejo: el
+espía del segundo registró `[12, 12, 12, 0, 5, 10, ...]`, o sea que un lector
+alcanzaba a ver **cero** filas.
+
+*Lo que queda.* `push_to_turso` sigue haciendo `DELETE` y luego `INSERT` por
+lotes de 2,000 contra el remoto, así que un pull que caiga en medio de un push se
+trae un snapshot parcial. Ahora lo instala completo y consistente, sólo que
+incompleto, y sigue contenido y no silencioso: `listas_incompletas()` compara
+contra `source_files.rows` y el veredicto contesta `NO_VERIFICADO` en vez de un
+`LIMPIO` falso. Desde el #28 la carrera casi no existe, porque el `/reload` lo
+dispara la ingesta *después* de que su push terminó. Cerrarlo de raíz pide tablas
+de paso remotas y un swap de nombres: `TransactionSync` de libsql sólo expone
+`execute`, no `batch`, así que una transacción remota serían 584 mil viajes HTTP
+en vez de 292 lotes.
 
 El historial de por qué esto importa: el 18-oct el servicio importó 15,024 de
 557,094 filas y pasó el día contestando con el 2.7% de la lista del Art. 69, sin
 que nada avisara, porque `pull_from_turso` devolvía el total parcial en vez de
-levantar.
+levantar. Ese modo de falla ahora tiene su test.
 
 ## Cómo volver a medir esto
 
