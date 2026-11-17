@@ -222,3 +222,156 @@ def test_si_nada_cambio_no_se_pushea(local, monkeypatch):
     assert all(r.get("cached") for r in segunda["resultados"]), segunda
     assert len(pushes) == 1, "se pusheó de nuevo sin que nada cambiara"
     assert segunda["turso_rows_pushed"] == 0
+
+
+# --- El pull es atómico: una transacción, no un commit por lote --------------
+#
+# Medido el 2026-11-16 contra una base sembrada con los volúmenes reales
+# (508,264 filas del 69 y 60,582 del CSD, 168 MB), comparando el pull con commit
+# por lote contra el pull en una transacción:
+#
+#   lecturas parciales de un lector concurrente : 32 de 44   ->  0 de 106
+#   lo que deja una caída en el lote 40         : 39.3% de la lista -> índice
+#                                                 anterior intacto
+#   duración                                    : 23.1s -> 56.1s
+#   WAL máximo                                  : 129 MB -> 177 MB
+#
+# Los dos tests de abajo son esas dos filas. Con el código viejo los dos
+# reprueban, que es la única razón por la que valen.
+
+
+class _ClienteQueFallaEnLaPagina:
+    """Como `_FakeClient`, pero truena en la N-ésima página de `SELECT ... LIMIT`.
+
+    Hace falta porque `truena_en` de `_FakeClient` revienta en el primer
+    `execute` que menciona la tabla, y ése es el `count(*)`: eso pasa ANTES de
+    cualquier escritura local, así que no ejercita el rollback.
+    """
+
+    def __init__(self, conn: sqlite3.Connection, pagina: int):
+        self._conn = conn
+        self._pagina = pagina
+        self._vistas = 0
+
+    def execute(self, sql, args=None):
+        if "LIMIT" in sql and "registros_csd" in sql:
+            self._vistas += 1
+            if self._vistas > self._pagina:
+                raise RuntimeError("Turso se cayó a media página")
+        return _Res(self._conn.execute(sql, args or []).fetchall())
+
+    def batch(self, stmts):
+        for s in stmts:
+            self._conn.execute(s.sql, s.args)
+
+    def close(self):
+        pass
+
+
+class _ClienteQueEspia:
+    """Imita libsql y, en cada página, anota qué vería un lector concurrente.
+
+    Es el servicio atendiendo consultas mientras el pull corre. Abre su PROPIA
+    conexión al mismo archivo, que es lo que hace un lector de verdad.
+    """
+
+    def __init__(self, conn: sqlite3.Connection, ruta: Path):
+        self._conn = conn
+        self._ruta = ruta
+        self.visto: list[int] = []
+
+    def _espiar(self) -> None:
+        lector = sqlite3.connect(self._ruta, timeout=5)
+        try:
+            self.visto.append(lector.execute("SELECT count(*) FROM registros_csd").fetchone()[0])
+        finally:
+            lector.close()
+
+    def execute(self, sql, args=None):
+        if "LIMIT" in sql:
+            self._espiar()
+        return _Res(self._conn.execute(sql, args or []).fetchall())
+
+    def batch(self, stmts):
+        for s in stmts:
+            self._conn.execute(s.sql, s.args)
+
+    def close(self):
+        pass
+
+
+def _sembrar_local_csd(filas: int) -> None:
+    """Un índice anterior en la base local, para tener algo que perder."""
+    with db.get_conn() as conn:
+        for i in range(filas):
+            conn.execute(
+                "INSERT INTO registros_csd (rfc, nombre, supuesto, fecha_cancelacion, "
+                "admon_responsable, fecha_publicacion, datos, imported_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (f"VIE{i:06d}XX1", "LO QUE YA SERVIA", "FRACCION X", "2024-01-01",
+                 "AGR", "2024-07-23", "[]", "2026-01-01T00:00:00Z"),
+            )
+
+
+def test_un_pull_que_truena_deja_el_indice_anterior_intacto(local, remoto, monkeypatch):
+    """**El incidente del 18-oct, convertido en test.**
+
+    Ese día el servicio importó 15,024 de 557,094 filas y pasó el día
+    contestando con el 2.7% de la lista. Con commit por lote, una caída a media
+    tabla deja instalado lo que alcanzó a entrar; con una transacción, el
+    rollback devuelve el índice anterior completo.
+
+    Antes esto no se probaba: el test de arriba sólo verifica que se levante
+    `PullFallido`, y levantar no dice nada sobre lo que quedó en disco.
+    """
+    _sembrar_local_csd(12)
+    _sembrar_remoto(remoto, 40)
+    monkeypatch.setattr(turso, "_PULL_CHUNK", 5)
+    monkeypatch.setattr(turso, "_client", lambda: _ClienteQueFallaEnLaPagina(remoto, pagina=3))
+
+    with pytest.raises(turso.PullFallido):
+        turso.pull_from_turso()
+
+    with db.get_conn() as conn:
+        quedaron = conn.execute("SELECT count(*) FROM registros_csd").fetchone()[0]
+        viejas = conn.execute(
+            "SELECT count(*) FROM registros_csd WHERE nombre = 'LO QUE YA SERVIA'"
+        ).fetchone()[0]
+    assert quedaron == 12, (
+        f"el pull falló y dejó {quedaron} filas: el índice anterior se perdió. "
+        "Con commit por lote quedarían las que alcanzaron a entrar."
+    )
+    assert viejas == 12, "quedaron 12 filas pero no son las de antes"
+
+
+def test_nadie_ve_el_indice_a_medias_mientras_el_pull_corre(local, remoto, monkeypatch, tmp_path):
+    """**La ventana que se midió en producción el 12-nov**, cuando el servicio
+    subió de 165 mil a 508 mil filas con `69b` en cero durante unos dos minutos.
+
+    El espía abre su propia conexión en cada página, que es lo que hace el
+    servicio atendiendo una consulta. En WAL un lector ve el último estado
+    COMPROMETIDO, así que con una sola transacción tiene que ver siempre el
+    índice anterior, nunca uno a medias.
+    """
+    _sembrar_local_csd(12)
+    _sembrar_remoto(remoto, 40)
+    _sembrar_las_otras_tres(remoto)
+    monkeypatch.setattr(turso, "_PULL_CHUNK", 5)
+    espia = _ClienteQueEspia(remoto, Path(db._path()))
+    monkeypatch.setattr(turso, "_client", lambda: espia)
+
+    turso.pull_from_turso()
+
+    assert len(espia.visto) >= 4, (
+        f"sólo {len(espia.visto)} muestras; sin varias páginas el test no prueba nada"
+    )
+    parciales = [n for n in espia.visto if n not in (12, 40)]
+    assert not parciales, (
+        f"un lector vio el índice a medias durante el pull: {espia.visto}. "
+        "Con commit por lote se ven los conteos intermedios."
+    )
+    assert espia.visto[0] == 12, (
+        f"la primera muestra debería ver el índice ANTERIOR completo, vio {espia.visto[0]}"
+    )
+    with db.get_conn() as conn:
+        assert conn.execute("SELECT count(*) FROM registros_csd").fetchone()[0] == 40

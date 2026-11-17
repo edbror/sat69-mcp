@@ -111,10 +111,57 @@ def _client():
 
 
 def pull_from_turso() -> int:
-    """Turso → local (reemplazo completo, por lotes). Devuelve filas importadas.
+    """Turso → local (reemplazo completo, **en UNA transacción**). Filas importadas.
 
-    Lee cada tabla en páginas de _PULL_CHUNK e inserta sobre la marcha, para no
-    materializar ½M de filas en memoria (el free tier de Render son 512Mi).
+    Lee cada tabla remota en páginas de `_PULL_CHUNK` e inserta sobre la marcha,
+    para no materializar ½M de filas en memoria (el free tier de Render son
+    512Mi). Lo que cambió es *dónde* están los commits.
+
+    ## Por qué una sola transacción, y qué costaba no tenerla
+
+    Antes esto abría una conexión nueva —y por lo tanto hacía un commit— por cada
+    `DELETE` y por cada lote de 5,000. O sea que el índice que el servicio estaba
+    sirviendo se reconstruía **en vivo**, y eso tenía dos consecuencias, las dos
+    medidas el 2026-11-16 contra una base sembrada con los volúmenes reales
+    (508,264 filas del 69 y 60,582 del CSD, 168 MB):
+
+    1. **Lecturas parciales mientras corre.** Un lector concurrente vio el índice
+       a medias en **32 de 44** muestras, incluido cero. Con una transacción:
+       **0 de 106**; vio las 508,264 filas todo el tiempo y el cambio apareció de
+       golpe. Esto se había visto en producción el 12-nov: el servicio subió de
+       165 mil a 508 mil filas con `69b` en cero durante unos dos minutos.
+    2. **Y lo que queda si se cae a la mitad.** Con commit por lote, una caída en
+       el lote 40 dejaba **39.3% de la lista** instalada como si fuera completa.
+       Con una transacción, el `rollback` deja el índice anterior **intacto**.
+       Eso es exactamente el incidente del 18-oct, cuando el servicio importó
+       15,024 de 557,094 filas y pasó el día contestando con el 2.7% de la lista.
+
+    Funciona porque `get_conn()` pone `PRAGMA journal_mode=WAL`: en WAL los
+    lectores no se bloquean y ven el último estado **comprometido**, así que
+    mientras esta transacción escribe, el servicio sigue respondiendo con el
+    índice anterior completo. Y `get_conn()` ya hace commit al salir bien y
+    rollback al salir con excepción, que es justo la semántica que hace falta;
+    lo único que hacía falta era subir el `with` afuera de los bucles.
+
+    ## Lo que cuesta, dicho con el número
+
+    Tarda **2.4x más** (23.1s → 56.1s medidos) y el WAL llega a 177 MB en vez de
+    129, porque una transacción grande no puede ir liberando páginas. Para algo
+    que corre una vez al día y cuyo precio es dejar de servir datos a medias, el
+    cambio sobra. El `wal_checkpoint` de abajo devuelve el espacio al terminar.
+
+    ## Lo que esto NO arregla
+
+    El `push_to_turso` sigue sin ser atómico del lado remoto, así que un pull que
+    caiga en medio de un push se trae un snapshot parcial y lo instala **completo
+    y consistente**, sólo que incompleto. Sigue contenido y no silencioso:
+    `listas_incompletas()` compara contra `source_files.rows` y hace que el
+    veredicto conteste `NO_VERIFICADO` en vez de un `LIMPIO` falso. Y desde el
+    #28 la carrera casi no existe, porque el `/reload` lo dispara la ingesta
+    *después* de que su push terminó. Cerrarlo de raíz pide tablas de paso
+    remotas y un swap de nombres: `TransactionSync` de libsql sólo expone
+    `execute`, no `batch`, así que una transacción remota serían 584 mil viajes
+    HTTP en vez de 292 lotes.
     """
     client = _client()
     if client is None:
@@ -128,21 +175,28 @@ def pull_from_turso() -> int:
         for stmt in _SCHEMA_STMTS:
             client.execute(stmt)
 
-        for table, cols in _TABLES.items():
-            n = client.execute(f"SELECT count(*) FROM {table}").rows[0][0]
-            with db.get_conn() as conn:
+        # **Una sola transacción para TODO el reemplazo.** Si algo de aquí
+        # adentro truena, `get_conn()` hace rollback y el índice anterior queda
+        # entero. Las lecturas remotas van dentro a propósito: tener la
+        # transacción local abierta mientras se pagina Turso no estorba a nadie,
+        # porque en WAL los lectores no se bloquean.
+        with db.get_conn() as conn:
+            for table, cols in _TABLES.items():
+                n = client.execute(f"SELECT count(*) FROM {table}").rows[0][0]
                 conn.execute(f"DELETE FROM {table}")
-            if not n:
-                continue
-            col_list = ", ".join(cols)
-            insert = f"INSERT INTO {table} ({col_list}) VALUES ({', '.join('?' for _ in cols)})"
-            for offset in range(0, n, _PULL_CHUNK):
-                res = client.execute(
-                    f"SELECT {col_list} FROM {table} LIMIT {_PULL_CHUNK} OFFSET {offset}"
+                if not n:
+                    continue
+                col_list = ", ".join(cols)
+                insert = (
+                    f"INSERT INTO {table} ({col_list}) "
+                    f"VALUES ({', '.join('?' for _ in cols)})"
                 )
-                with db.get_conn() as conn:
+                for offset in range(0, n, _PULL_CHUNK):
+                    res = client.execute(
+                        f"SELECT {col_list} FROM {table} LIMIT {_PULL_CHUNK} OFFSET {offset}"
+                    )
                     conn.executemany(insert, [list(row) for row in res.rows])
-                total += len(res.rows)
+                    total += len(res.rows)
     except Exception as exc:
         # NO se devuelve el total parcial. Devolverlo hacía que una falla a medio
         # pull fuera indistinguible de un pull chico y exitoso, y eso es justo lo
@@ -158,6 +212,18 @@ def pull_from_turso() -> int:
         logger.info("Turso vacío — nada que importar")
     else:
         logger.info("Importadas %d filas de Turso", total)
+
+    # Una transacción de medio millón de filas deja el WAL en ~177 MB (medido), y
+    # sin esto se queda así hasta que SQLite decida reciclarlo solo. En el disco
+    # efímero de Render eso es espacio que nadie va a reclamar. El checkpoint no
+    # puede fallar de forma interesante, pero si falla no vale tirar un pull que
+    # ya quedó bien: es higiene, no corrección.
+    try:
+        with db.get_conn() as conn:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("no se pudo truncar el WAL tras el pull: %s", exc)
+
     return total
 
 
