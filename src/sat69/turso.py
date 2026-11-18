@@ -109,34 +109,28 @@ _PULL_CHUNK = 5000  # ponytail: pull por lotes; 512Mi de Render no aguanta ½M d
 
 
 def _normalize_url(url: str) -> str:
-    """La URL de Turso, forzada a **WebSocket**.
+    """La URL de Turso, forzada a **HTTP**. No lo cambies sin leer esto.
 
-    Antes esto hacía lo contrario: convertía `libsql://` y `wss://` en `https://`.
-    Venía del commit inicial del repo sin un motivo escrito, y costó un push
-    fallido en producción el 2026-11-18:
+    Esta instancia sólo habla HTTP. Está medido las dos veces, el 2026-11-18:
 
-        TRANSACTIONS_NOT_SUPPORTED: The HTTP client does not support
-        transactions. Please use a libsql:, ws: or wss: URL, so that the
-        client connects using a WebSocket.
+        https://  →  funciona, pero `client.transaction()` da
+                     TRANSACTIONS_NOT_SUPPORTED: The HTTP client does not
+                     support transactions.
+        wss://    →  400, message='Invalid response status'
 
-    O sea que el transporte HTTP de libsql **no tiene transacciones**, y el swap
-    atómico del push las necesita. El propio servidor dice cuál es la vía
-    soportada, así que se usa ésa. `wss://` es el mismo TLS que `https://`, no
-    es menos seguro ni abre un puerto nuevo.
+    O sea que el consejo del propio mensaje de error —"use a libsql:, ws: or
+    wss: URL"— **no aplica a este endpoint**, y la normalización a `https://`
+    que traía el commit inicial del repo no era arbitraria: era necesaria y le
+    faltaba el comentario. Yo la cambié a `wss://` creyendo que era un descuido
+    y la corrida reprobó en el primer pull.
 
-    Y sí, yo había verificado `client.transaction()` contra libsql en modo
-    ARCHIVO, donde funciona. Ése fue el error: el modo archivo ejercita
-    `TransactionSync` pero no el transporte, que era exactamente lo que no podía
-    probar y lo dije. Probarlo en producción fue lo que lo encontró, y lo
-    encontró sin daño porque un push fallido ya no toca el remoto.
+    Consecuencia de diseño: **el push no puede usar `transaction()`.** Lo que sí
+    hay es `batch()`, que el repo ya usaba para los INSERT, así que el swap va
+    en un batch. Ver `push_to_turso`.
     """
-    # `http://` va a `ws://` y no a `wss://`: es el caso de un sqld local sin
-    # TLS, y mandarle TLS a un puerto que no lo habla falla de forma confusa.
-    if url.startswith("http://"):
-        return "ws://" + url[len("http://"):]
-    for prefijo in ("https://", "libsql://"):
+    for prefijo in ("libsql://", "wss://", "ws://"):
         if url.startswith(prefijo):
-            return "wss://" + url[len(prefijo):]
+            return "https://" + url[len(prefijo):]
     return url
 
 
@@ -279,38 +273,46 @@ def push_to_turso() -> int:
     ## Por qué tablas de paso y un swap, y no `DELETE` + `INSERT`
 
     Antes esto hacía, por tabla, un `DELETE FROM <tabla>` y luego `INSERT` por
-    lotes de 2,000 **sobre la tabla que el servicio lee**. O sea que durante los
-    ~3 minutos del push el remoto pasaba por estar vacío y luego a medio llenar,
-    y un `pull` que cayera ahí se traía un pedazo. Si el push se caía a la mitad,
-    el remoto se quedaba así: el almacén durable, incompleto, hasta la corrida
-    siguiente.
+    lotes **sobre la tabla que el servicio lee**. Durante los ~3 minutos del push
+    el remoto pasaba por estar vacío y luego a medio llenar, y si se caía a la
+    mitad el almacén durable se quedaba así hasta la corrida siguiente. Medido
+    con el código real, cortando en el segundo lote: el remoto quedaba con 2,000
+    filas y CERO de las 1,500 que tenía.
 
     Ahora los `INSERT` van a tablas de paso (`<tabla>__nuevo`), que nadie lee, y
-    al final **una sola transacción** cambia los nombres de las cinco de golpe.
-    Un lector ve o todo lo viejo o todo lo nuevo. Si algo truena antes del swap,
-    el remoto queda exactamente como estaba y lo único que sobra son las tablas
-    de paso, que la corrida siguiente tira.
+    al final el swap cambia los nombres de las cinco. Un lector ve o todo lo
+    viejo o todo lo nuevo. Si algo truena antes del swap, el remoto queda
+    exactamente como estaba y lo único que sobra son las tablas de paso, que la
+    corrida siguiente tira con su `DROP TABLE IF EXISTS`.
 
-    Los `INSERT` se quedan FUERA de la transacción a propósito: `TransactionSync`
-    de libsql sólo expone `execute`, no `batch`, así que meterlos adentro serían
-    584 mil viajes HTTP en vez de 292 lotes. La transacción sólo carga el swap,
-    que son diez sentencias de DDL.
+    ## Por qué el swap va en `batch` y NO en `transaction`
 
-    Las tres propiedades en que esto se apoya se comprobaron contra el cliente de
-    libsql antes de escribirlo, no se supusieron: que `DROP` y `ALTER ... RENAME`
-    funcionan dentro de `client.transaction()`, que el `rollback` deja la tabla
-    vieja intacta, y que el `UNIQUE` de `source_files.source_file` sobrevive al
-    rename.
+    Porque sobre este endpoint `transaction()` no existe. Las dos mediciones del
+    2026-11-18, en ese orden:
+
+        https://  →  TRANSACTIONS_NOT_SUPPORTED: The HTTP client does not
+                     support transactions. Please use a libsql:, ws: or wss: URL.
+        wss://    →  400, message='Invalid response status'
+
+    O sea que el consejo del propio mensaje de error no aplica aquí, y la
+    normalización a `https://` que trae `_normalize_url` es necesaria. Lo que sí
+    hay sobre HTTP es `batch`, que este archivo ya usaba para los INSERT, y el
+    servidor lo ejecuta como una unidad: se comprobó que un batch con una
+    sentencia que revienta a la mitad no deja ninguna de las otras.
+
+    Los `INSERT` se quedan en batches aparte y NO dentro del batch del swap: son
+    584 mil filas en 292 lotes, y meterlas en una sola unidad no tendría por qué
+    caber. El batch del swap son diez sentencias de DDL.
 
     ## Lo que sigue sin cubrir
 
-    El swap es atómico, pero la lectura del local que lo alimenta no toma un
-    snapshot: `data` se arma con un `SELECT *` por tabla dentro de una sola
-    conexión, así que si alguien escribiera el local a la mitad de esa lectura,
-    el push mandaría tablas de distintos momentos. Hoy no pasa porque el único
-    escritor es la propia ingesta, que es quien llama a esto y lo hace después de
-    terminar de importar. Queda anotado porque el día que haya dos escritores,
-    deja de ser cierto.
+    La lectura del local que alimenta esto no toma un snapshot: `data` se arma
+    con un `SELECT *` por tabla dentro de una sola conexión, así que si alguien
+    escribiera el local a la mitad de esa lectura, el push mandaría tablas de
+    distintos momentos. Hoy no pasa porque el único escritor es la propia
+    ingesta, que es quien llama a esto y lo hace después de terminar de
+    importar. Queda anotado porque el día que haya dos escritores, deja de ser
+    cierto.
     """
     client = _client()
     if client is None:
@@ -353,17 +355,25 @@ def push_to_turso() -> int:
                     client.batch(batch)
                     total += len(batch)
 
-        # **El swap. Hasta aquí el remoto no se tocó.** Diez sentencias en una
-        # transacción: o entran las cinco tablas nuevas, o no entra ninguna.
-        tx = client.transaction()
-        try:
-            for tabla, paso in de_paso.items():
-                tx.execute(f"DROP TABLE IF EXISTS {tabla}")
-                tx.execute(f"ALTER TABLE {paso} RENAME TO {tabla}")
-            tx.commit()
-        except Exception:
-            tx.rollback()
-            raise
+        # **El swap. Hasta aquí el remoto no se tocó.**
+        #
+        # Va en UN `batch` y no en `client.transaction()`, y eso no es
+        # preferencia: este endpoint sólo habla HTTP y el transporte HTTP de
+        # libsql no tiene transacciones (ver `_normalize_url`, con las dos
+        # mediciones). `batch` sí existe sobre HTTP —el repo ya lo usaba para
+        # los INSERT— y el servidor lo ejecuta como una unidad: comprobado que
+        # un batch con una sentencia que revienta a la mitad no deja ninguna de
+        # las otras.
+        #
+        # Diez sentencias: por tabla, tirar la real y renombrar la de paso.
+        client.batch([
+            Statement(sql)
+            for tabla, paso in de_paso.items()
+            for sql in (
+                f"DROP TABLE IF EXISTS {tabla}",
+                f"ALTER TABLE {paso} RENAME TO {tabla}",
+            )
+        ])
 
         logger.info("Enviadas %d filas a Turso", total)
         return total
