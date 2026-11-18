@@ -212,11 +212,21 @@ def test_si_nada_cambio_no_se_pushea(local, monkeypatch):
     una ventana más de pull parcial para quien arranque en ese momento."""
     _stub_descarga(monkeypatch, _FIXTURE_CSD.read_bytes())
     pushes = []
-    monkeypatch.setattr(turso, "push_to_turso", lambda: pushes.append(1) or 0)
+
+    # El stub devuelve un conteo y no 0, y eso ya no es un detalle: desde que un
+    # push que devuelve 0 habiendo cambios se cuenta como FALLA, un stub que
+    # devolvía 0 modelaba un push roto mientras el test decía "la primera sí
+    # tiene que pushear".
+    def _push_ok():
+        pushes.append(1)
+        return 4  # 3 filas de CSD + su renglón de source_files
+
+    monkeypatch.setattr(turso, "push_to_turso", _push_ok)
 
     primera = pipeline.process_import("csd")
     assert primera["rows_importados"] == 3
     assert len(pushes) == 1, "la primera sí tiene que pushear"
+    assert primera["success"] is True, primera["errores"]
 
     segunda = pipeline.process_import("csd")
     assert all(r.get("cached") for r in segunda["resultados"]), segunda
@@ -375,3 +385,50 @@ def test_nadie_ve_el_indice_a_medias_mientras_el_pull_corre(local, remoto, monke
     )
     with db.get_conn() as conn:
         assert conn.execute("SELECT count(*) FROM registros_csd").fetchone()[0] == 40
+
+
+# --- Un push fallido no se disfraza de día tranquilo -------------------------
+
+def test_un_push_que_no_envia_nada_habiendo_cambios_es_un_error(local, monkeypatch, caplog):
+    """**El defecto que el #28 introdujo sin querer, y que este test cierra.**
+
+    `turso_rows_pushed` valía 0 en dos casos muy distintos: cuando no había nada
+    que empujar, y cuando el push falló. Desde que el workflow decide con ese
+    número, un push roto imprimía "el SAT no publicó nada nuevo" y la corrida
+    pasaba en VERDE todos los días, mientras el almacén durable se quedaba sin
+    lo que la ingesta acababa de importar y el servicio seguía sirviendo el
+    corte viejo.
+
+    Ahora eso cuenta como error, con lo cual `main()` sale con 1 y el paso del
+    workflow truena ANTES de llegar al aviso al servicio.
+    """
+    _stub_descarga(monkeypatch, _FIXTURE_CSD.read_bytes())
+    monkeypatch.setattr(turso, "push_to_turso", lambda: 0)  # falló
+
+    res = pipeline.process_import("csd")
+
+    assert res["rows_importados"] == 3, "la importación local sí funcionó"
+    assert res["success"] is False, (
+        "un push que no envió nada habiendo cambios tiene que marcar la corrida "
+        "como fallida; si no, el workflow pasa en verde con el remoto viejo"
+    )
+    assert any("push a Turso" in e.get("source_file", "") for e in res["errores"]), res["errores"]
+    assert any("almacén durable" in r.message for r in caplog.records), (
+        "el log tiene que decir qué se perdió, no sólo que algo falló"
+    )
+
+
+def test_cuando_no_hubo_cambios_el_cero_sigue_siendo_normal(local, monkeypatch):
+    """El otro lado del mismo candado: sin cambios, 0 es correcto y la corrida
+    pasa. Sin este test, hacer que TODO cero fuera error dejaría el cron en rojo
+    todos los días que el SAT no publica, que son casi todos."""
+    _stub_descarga(monkeypatch, _FIXTURE_CSD.read_bytes())
+    llamadas = []
+    monkeypatch.setattr(turso, "push_to_turso", lambda: llamadas.append(1) or 9)
+
+    pipeline.process_import("csd")          # primera: importa y pushea
+    segunda = pipeline.process_import("csd")  # segunda: todo de caché
+
+    assert segunda["turso_rows_pushed"] == 0
+    assert segunda["success"] is True, segunda["errores"]
+    assert len(llamadas) == 1, "no debió pushear la segunda vez"

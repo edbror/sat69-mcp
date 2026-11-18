@@ -1,8 +1,9 @@
 # ESTADO — sat69-mcp
 
 > Medido el 2026-10-08 contra disco, GitHub y la API de Render. Los dos pendientes
-> de "Qué lo bloquea" se cerraron el 2026-11-16 y se volvieron a medir ese día,
-> contra el servicio vivo y contra una base con los volúmenes reales.
+> de "Qué lo bloquea" se cerraron el 2026-11-16 y el 2026-11-17, y se midieron
+> esos días contra el servicio vivo, el cliente de libsql y una base con los
+> volúmenes reales.
 > **Lo de abajo caduca.** Si esta fecha ya está vieja, no te creas el contenido:
 > vuelve a medirlo con los comandos del final.
 
@@ -48,7 +49,7 @@ Hoy lo consume `sat-defensa` para acotar la rama según la situación del RFC.
 
 Funcionando y en uso. FastMCP con stdio + Streamable HTTP, OAuth 2.1 (WorkOS
 AuthKit) con fallback a bearer estático, persistencia en Turso, despliegue en
-Render con cron de refresco por GitHub Actions. Nueve archivos de prueba.
+Render con cron de refresco por GitHub Actions. Diez archivos de prueba.
 
 Dato que confunde y está documentado: la lista del **69-B Bis tiene tres
 registros en todo el país**. Un conteo de un dígito es correcto, no una
@@ -56,10 +57,9 @@ importación fallida.
 
 ## Qué lo bloquea
 
-Nada. Las dos cosas que estaban anotadas aquí se cerraron el 16-nov-2026 y se
-quedan escritas con su medición, porque el por qué de cada decisión es lo que
-evita que alguien la deshaga. De la segunda queda un residuo, contenido y no
-silencioso, con el motivo de no cerrarlo todavía.
+Nada. Las dos cosas que estaban anotadas aquí se cerraron el 16 y 17-nov-2026 y
+se quedan escritas con su medición, porque el por qué de cada decisión es lo que
+evita que alguien la deshaga.
 
 **1. El servicio servía el corte del ciclo anterior.**
 
@@ -79,7 +79,7 @@ si la ingesta empujó algo**: recargar sin novedades hacía al servicio re-bajar
 las ~583 mil filas para nada, y el SAT publica cada varias semanas, así que el
 caso normal es que no haya cambios.
 
-**2. El pull ya es atómico; al push le queda un residuo contenido.**
+**2. El pull y el push ya son atómicos.**
 
 *Cerrado el 2026-11-16.* `pull_from_turso` abría una conexión —y por lo tanto
 hacía un commit— por cada `DELETE` y por cada lote de 5,000, o sea que
@@ -108,16 +108,43 @@ Las dos filas de arriba son los dos tests nuevos de
 espía del segundo registró `[12, 12, 12, 0, 5, 10, ...]`, o sea que un lector
 alcanzaba a ver **cero** filas.
 
-*Lo que queda.* `push_to_turso` sigue haciendo `DELETE` y luego `INSERT` por
-lotes de 2,000 contra el remoto, así que un pull que caiga en medio de un push se
-trae un snapshot parcial. Ahora lo instala completo y consistente, sólo que
-incompleto, y sigue contenido y no silencioso: `listas_incompletas()` compara
-contra `source_files.rows` y el veredicto contesta `NO_VERIFICADO` en vez de un
-`LIMPIO` falso. Desde el #28 la carrera casi no existe, porque el `/reload` lo
-dispara la ingesta *después* de que su push terminó. Cerrarlo de raíz pide tablas
-de paso remotas y un swap de nombres: `TransactionSync` de libsql sólo expone
-`execute`, no `batch`, así que una transacción remota serían 584 mil viajes HTTP
-en vez de 292 lotes.
+*El push también, cerrado el 2026-11-17.* Hacía `DELETE FROM <tabla>` y luego
+`INSERT` por lotes **sobre la tabla que el servicio lee**, así que durante los
+~3 minutos del push el remoto pasaba por vacío y luego a medio llenar, y una
+caída dejaba el almacén durable incompleto hasta la corrida siguiente. Medido
+con el código real, cortando en el segundo lote: el remoto quedaba con 2,000
+filas y **cero** de las 1,500 que tenía. Ahora los `INSERT` van a tablas de paso
+(`<tabla>__nuevo`) y una sola transacción cambia los nombres de las cinco de
+golpe; mismo corte, el remoto queda con sus 1,500 intactas.
+
+Los `INSERT` se quedan fuera de la transacción a propósito: `TransactionSync` de
+libsql sólo expone `execute`, no `batch`, así que meterlos adentro serían 584 mil
+viajes HTTP en vez de 292 lotes. La transacción sólo carga el swap, diez
+sentencias de DDL. Las tres propiedades en que se apoya se comprobaron contra el
+cliente de libsql antes de escribir el código: que `DROP` y `ALTER ... RENAME`
+funcionan dentro de `client.transaction()`, que el `rollback` deja la tabla vieja
+intacta, y que el `UNIQUE` de `source_files.source_file` sobrevive al rename.
+
+*Y un defecto que esto destapó, del #28.* `turso_rows_pushed` valía 0 en dos
+casos muy distintos: cuando no había nada que empujar y cuando el push falló.
+Desde que el workflow decide con ese número, un push roto imprimía "el SAT no
+publicó nada nuevo" y la corrida pasaba en VERDE **todos los días**, mientras el
+almacén durable se quedaba sin lo que la ingesta acababa de importar. Ahora un
+push que no envía nada habiendo cambios cuenta como error: `main()` sale con 1 y
+el paso del workflow truena antes de llegar al aviso al servicio. Hay test de
+los dos lados, porque hacer que todo cero fuera error habría dejado el cron en
+rojo los días que el SAT no publica, que son casi todos.
+
+*Lo que sigue sin cubrir.* El swap es atómico, pero la lectura del local que lo
+alimenta no toma un snapshot: `data` se arma con un `SELECT *` por tabla en una
+sola conexión, así que con dos escritores el push podría mandar tablas de
+distintos momentos. Hoy no pasa porque el único escritor es la propia ingesta,
+que es quien llama al push y lo hace después de terminar de importar. Queda
+anotado porque el día que haya dos, deja de ser cierto.
+
+Y hasta hoy `push_to_turso` **no tenía ni un test**: la única mención en la suite
+lo reemplazaba por un lambda, así que las 98 pruebas podían estar en verde con el
+push roto. Ahora tiene cinco en `test_push_atomico.py`.
 
 El historial de por qué esto importa: el 18-oct el servicio importó 15,024 de
 557,094 filas y pasó el día contestando con el 2.7% de la lista del Art. 69, sin
