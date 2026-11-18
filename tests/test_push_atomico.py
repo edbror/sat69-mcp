@@ -215,3 +215,34 @@ def test_el_esquema_de_las_de_paso_es_el_mismo_que_el_de_las_reales():
     # Y el UNIQUE de source_files tiene que estar en los dos.
     assert "UNIQUE" in turso._crear("source_files")
     assert "UNIQUE" in turso._crear("source_files", como="source_files__nuevo")
+
+
+# --- El transporte: WebSocket, no HTTP ---------------------------------------
+
+@pytest.mark.parametrize(("entra", "sale"), [
+    ("libsql://sat69.turso.io", "wss://sat69.turso.io"),
+    ("https://sat69.turso.io", "wss://sat69.turso.io"),
+    ("wss://sat69.turso.io", "wss://sat69.turso.io"),
+    ("http://localhost:8080", "ws://localhost:8080"),      # sqld local sin TLS
+    ("file:///tmp/sat69.db", "file:///tmp/sat69.db"),      # las pruebas
+])
+def test_la_url_se_fuerza_a_websocket(entra, sale):
+    """**El candado del incidente del 2026-11-18.**
+
+    `_normalize_url` hacía lo contrario: forzaba `https://`. El transporte HTTP
+    de libsql NO soporta transacciones, así que el swap atómico del push moría
+    con `TRANSACTIONS_NOT_SUPPORTED` y el remoto se quedaba sin la ingesta del
+    día. Si alguien vuelve a poner `https://` aquí, este test truena antes de
+    que lo descubra un cron.
+    """
+    assert turso._normalize_url(entra) == sale
+
+
+def test_ninguna_url_de_turso_acaba_en_http():
+    """Dicho como propiedad y no caso por caso, para que una forma nueva de URL
+    no se escape: nada que entre puede salir hablando HTTP."""
+    for entra in ("libsql://a.b", "https://a.b", "wss://a.b", "http://a.b:8080"):
+        salida = turso._normalize_url(entra)
+        assert not salida.startswith(("http://", "https://")), (
+            f"{entra} salió como {salida}: el transporte HTTP no tiene transacciones"
+        )

@@ -109,9 +109,34 @@ _PULL_CHUNK = 5000  # ponytail: pull por lotes; 512Mi de Render no aguanta ½M d
 
 
 def _normalize_url(url: str) -> str:
-    for prefix in ("libsql://", "wss://"):
-        if url.startswith(prefix):
-            return "https://" + url[len(prefix):]
+    """La URL de Turso, forzada a **WebSocket**.
+
+    Antes esto hacía lo contrario: convertía `libsql://` y `wss://` en `https://`.
+    Venía del commit inicial del repo sin un motivo escrito, y costó un push
+    fallido en producción el 2026-11-18:
+
+        TRANSACTIONS_NOT_SUPPORTED: The HTTP client does not support
+        transactions. Please use a libsql:, ws: or wss: URL, so that the
+        client connects using a WebSocket.
+
+    O sea que el transporte HTTP de libsql **no tiene transacciones**, y el swap
+    atómico del push las necesita. El propio servidor dice cuál es la vía
+    soportada, así que se usa ésa. `wss://` es el mismo TLS que `https://`, no
+    es menos seguro ni abre un puerto nuevo.
+
+    Y sí, yo había verificado `client.transaction()` contra libsql en modo
+    ARCHIVO, donde funciona. Ése fue el error: el modo archivo ejercita
+    `TransactionSync` pero no el transporte, que era exactamente lo que no podía
+    probar y lo dije. Probarlo en producción fue lo que lo encontró, y lo
+    encontró sin daño porque un push fallido ya no toca el remoto.
+    """
+    # `http://` va a `ws://` y no a `wss://`: es el caso de un sqld local sin
+    # TLS, y mandarle TLS a un puerto que no lo habla falla de forma confusa.
+    if url.startswith("http://"):
+        return "ws://" + url[len("http://"):]
+    for prefijo in ("https://", "libsql://"):
+        if url.startswith(prefijo):
+            return "wss://" + url[len(prefijo):]
     return url
 
 
