@@ -1,9 +1,9 @@
 # ESTADO — sat69-mcp
 
 > Medido el 2026-10-08 contra disco, GitHub y la API de Render. Los dos pendientes
-> de "Qué lo bloquea" se cerraron el 2026-11-16 y el 2026-11-17, y se midieron
-> esos días contra el servicio vivo, el cliente de libsql y una base con los
-> volúmenes reales.
+> de "Qué lo bloquea" se cerraron entre el 2026-11-16 y el 2026-11-18, y se
+> midieron esos días contra el Turso de producción, el servicio vivo y una base
+> con los volúmenes reales.
 > **Lo de abajo caduca.** Si esta fecha ya está vieja, no te creas el contenido:
 > vuelve a medirlo con los comandos del final.
 
@@ -57,7 +57,7 @@ importación fallida.
 
 ## Qué lo bloquea
 
-Nada. Las dos cosas que estaban anotadas aquí se cerraron el 16 y 17-nov-2026 y
+Nada. Las dos cosas que estaban anotadas aquí se cerraron entre el 16 y el 18-nov-2026 y
 se quedan escritas con su medición, porque el por qué de cada decisión es lo que
 evita que alguien la deshaga.
 
@@ -108,22 +108,43 @@ Las dos filas de arriba son los dos tests nuevos de
 espía del segundo registró `[12, 12, 12, 0, 5, 10, ...]`, o sea que un lector
 alcanzaba a ver **cero** filas.
 
-*El push también, cerrado el 2026-11-17.* Hacía `DELETE FROM <tabla>` y luego
+*El push también, cerrado el 2026-11-18.* Hacía `DELETE FROM <tabla>` y luego
 `INSERT` por lotes **sobre la tabla que el servicio lee**, así que durante los
 ~3 minutos del push el remoto pasaba por vacío y luego a medio llenar, y una
 caída dejaba el almacén durable incompleto hasta la corrida siguiente. Medido
-con el código real, cortando en el segundo lote: el remoto quedaba con 2,000
-filas y **cero** de las 1,500 que tenía. Ahora los `INSERT` van a tablas de paso
-(`<tabla>__nuevo`) y una sola transacción cambia los nombres de las cinco de
-golpe; mismo corte, el remoto queda con sus 1,500 intactas.
+con el código real, cortando en el segundo lote: quedaba con 2,000 filas y
+**cero** de las 1,500 que tenía. Ahora los `INSERT` van a tablas de paso
+(`<tabla>__nuevo`) y el swap cambia los nombres de las cinco; mismo corte, el
+remoto queda con sus 1,500 intactas.
 
-Los `INSERT` se quedan fuera de la transacción a propósito: `TransactionSync` de
-libsql sólo expone `execute`, no `batch`, así que meterlos adentro serían 584 mil
-viajes HTTP en vez de 292 lotes. La transacción sólo carga el swap, diez
-sentencias de DDL. Las tres propiedades en que se apoya se comprobaron contra el
-cliente de libsql antes de escribir el código: que `DROP` y `ALTER ... RENAME`
-funcionan dentro de `client.transaction()`, que el `rollback` deja la tabla vieja
-intacta, y que el `UNIQUE` de `source_files.source_file` sobrevive al rename.
+**El swap va en un `batch`, NO en una transacción, y eso costó dos corridas
+rojas.** Las mediciones, en orden:
+
+| transporte | qué pasó |
+|---|---|
+| `https://` + `transaction()` | `TRANSACTIONS_NOT_SUPPORTED: The HTTP client does not support transactions. Please use a libsql:, ws: or wss: URL` |
+| `wss://` (siguiendo ese consejo) | `400, message='Invalid response status'` en el primer pull |
+| `https://` + `batch()` | **funcionó**: 583,870 filas enviadas y el servicio recargó las cuatro listas completas |
+
+O sea que el consejo del propio mensaje de error **no aplica a este endpoint**, y
+la normalización a `https://` del commit inicial era necesaria: le faltaba el
+comentario, no el motivo. Lo que sí hay sobre HTTP es `batch`, que ya se usaba
+para los 292 lotes de INSERT, y el servidor lo ejecuta como una unidad. Los
+INSERT se quedan en batches aparte: 584 mil filas no tienen por qué caber en uno.
+
+Verificado contra el Turso real el 2026-11-18, corriendo el workflow **desde la
+rama** para no redesplegar el servicio con código sin probar:
+
+```
+Importadas 583870 filas de Turso          <- el pull atómico, sobre HTTP
+Enviadas 583870 filas a Turso             <- el push con tablas de paso y swap
+Resultado: 583862 registros importados; 0 error(es). (push Turso: 583870)
+POST /reload -> 200, 583870 filas, 508264 / 15013 / 3 / 60582
+```
+
+Las dos corridas fallidas no tocaron el remoto: el push nuevo no toca las tablas
+reales hasta el swap, el arreglo del conteo de abajo las marcó en rojo, y correr
+desde la rama dejó al servicio fuera del experimento.
 
 *Y un defecto que esto destapó, del #28.* `turso_rows_pushed` valía 0 en dos
 casos muy distintos: cuando no había nada que empujar y cuando el push falló.
