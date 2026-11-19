@@ -14,6 +14,7 @@ El acceso por RFC va por índice B-tree (búsqueda exacta, el camino caliente).
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 import unicodedata
 from collections.abc import Generator
@@ -21,6 +22,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import risk
+
+logger = logging.getLogger(__name__)
 
 
 def unaccent(text: str | None) -> str:
@@ -144,6 +147,13 @@ CREATE TABLE IF NOT EXISTS source_files (
     source_file        TEXT NOT NULL UNIQUE,
     sha256             TEXT,
     rows               INTEGER DEFAULT 0,
+    -- Tamaño del archivo que el SAT sirvió, en bytes. Es la ÚNICA cifra de esta
+    -- tabla que no sale de lo que nosotros parseamos, y de ahí su valor: `rows`
+    -- son las filas insertadas, así que contrastar la tabla contra `rows` no
+    -- puede detectar que el parser perdió filas (bajan las dos juntas). Los
+    -- bytes vienen del origen y no se mueven si el que falla somos nosotros.
+    -- Lo usa `_verificar_correspondencia` en el pipeline.
+    bytes              INTEGER,
     sat_actualizado_al TEXT,
     status             TEXT DEFAULT 'ok',
     error_msg          TEXT,
@@ -205,11 +215,33 @@ END;
 """
 
 
+# Columnas agregadas despues de que el esquema ya estaba en uso. `_SCHEMA` usa
+# `CREATE TABLE IF NOT EXISTS`, asi que una tabla que ya existe NO las recibe:
+# hay que pedirlas aparte. `ADD COLUMN` en SQLite es O(1) y no reescribe la
+# tabla, y si ya esta puesta tira "duplicate column name", que es lo que se
+# ignora. Es el minimo que hace falta aqui; el dia que haya una migracion que
+# mueva datos, esto se queda corto y toca algo con versiones.
+_COLUMNAS_AGREGADAS = [
+    ("source_files", "bytes", "INTEGER"),
+]
+
+
+def _migrar(conn) -> None:
+    for tabla, columna, tipo in _COLUMNAS_AGREGADAS:
+        try:
+            conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo}")
+            logger.info("migración: %s.%s agregada", tabla, columna)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
+
+
 def init_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     configure(db_path)
     with get_conn() as conn:
         conn.executescript(_SCHEMA)
+        _migrar(conn)
 
 
 # ---------------------------------------------------------------------------
@@ -346,23 +378,30 @@ def record_source(
     dataset: str, source_file: str, sha256: str, rows: int,
     fetched_at: str, sat_actualizado_al: str | None = None,
     status: str = "ok", error_msg: str | None = None,
+    bytes_origen: int | None = None,
 ) -> None:
+    """Deja constancia de lo que trajo un archivo. `bytes_origen` es su tamaño.
+
+    El parámetro se llama `bytes_origen` y no `bytes` porque `bytes` es un tipo
+    de Python y sombrearlo en una firma pública es pedir un bug de otro.
+    """
     with get_conn() as conn:
         conn.execute(
             """
             INSERT INTO source_files
-                (dataset, source_file, sha256, rows, sat_actualizado_al,
+                (dataset, source_file, sha256, rows, bytes, sat_actualizado_al,
                  status, error_msg, fetched_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_file) DO UPDATE SET
                 sha256             = excluded.sha256,
                 rows               = excluded.rows,
+                bytes              = excluded.bytes,
                 sat_actualizado_al = excluded.sat_actualizado_al,
                 status             = excluded.status,
                 error_msg          = excluded.error_msg,
                 fetched_at         = excluded.fetched_at
             """,
-            (dataset, source_file, sha256, rows, sat_actualizado_al,
+            (dataset, source_file, sha256, rows, bytes_origen, sat_actualizado_al,
              status, error_msg, fetched_at),
         )
 
@@ -376,19 +415,31 @@ def get_source_hash(source_file: str) -> str | None:
 
 
 def get_source_state(source_file: str) -> dict | None:
-    """Lo que dejó la última importación buena: filas y vigencia declarada.
+    """Lo que dejó la última importación buena: filas, bytes y vigencia declarada.
+
+    `bytes` puede venir en `None` en los archivos importados antes de que la
+    columna existiera; quien lo use tiene que tolerarlo.
 
     `None` si el archivo nunca se importó — ahí no hay nada que proteger y el
     guard de frescura de `pipeline` deja pasar la primera carga.
     """
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT rows, sat_actualizado_al FROM source_files WHERE source_file = ?",
+            "SELECT rows, bytes, sat_actualizado_al FROM source_files "
+            "WHERE source_file = ?",
             (source_file,),
         ).fetchone()
         if row is None:
             return None
-        return {"rows": row["rows"], "sat_actualizado_al": row["sat_actualizado_al"]}
+        # `bytes` va en el dict, no sólo en el SELECT. Al agregarlo se me quedó
+        # fuera de aquí y el guard de correspondencia tronó con KeyError, que es
+        # mejor de lo que habría pasado con un `.get("bytes")` defensivo:
+        # habría devuelto None y dejado el guard apagado para siempre, callado.
+        return {
+            "rows": row["rows"],
+            "bytes": row["bytes"],
+            "sat_actualizado_al": row["sat_actualizado_al"],
+        }
 
 
 # ---------------------------------------------------------------------------
