@@ -43,8 +43,12 @@ _TABLES = {
         "id", "rfc", "nombre", "supuesto", "fecha_cancelacion",
         "admon_responsable", "fecha_publicacion", "datos", "imported_at",
     ],
+    # `bytes` entra aqui y en `_COLUMNAS_DDL`: si se agrega al esquema local y
+    # no a estas dos listas, el push no la manda y el pull la deja en NULL en
+    # cada arranque, con lo cual el guard de correspondencia nunca tendria
+    # linea base y callaria para siempre sin que nada lo dijera.
     "source_files": [
-        "id", "dataset", "source_file", "sha256", "rows",
+        "id", "dataset", "source_file", "sha256", "rows", "bytes",
         "sat_actualizado_al", "status", "error_msg", "fetched_at",
     ],
 }
@@ -81,9 +85,15 @@ _COLUMNAS_DDL = {
     # libsql antes de escribir esto, porque un swap que se lo coma dejaria entrar
     # el mismo archivo dos veces y `listas_incompletas()` compara contra esta fila.
     "source_files": """id INTEGER PRIMARY KEY, dataset TEXT, source_file TEXT UNIQUE,
-        sha256 TEXT, rows INTEGER, sat_actualizado_al TEXT, status TEXT,
-        error_msg TEXT, fetched_at TEXT""",
+        sha256 TEXT, rows INTEGER, bytes INTEGER, sat_actualizado_al TEXT,
+        status TEXT, error_msg TEXT, fetched_at TEXT""",
 }
+
+# Columnas agregadas al remoto despues de que su tabla ya existia. Misma razon
+# que en `database.py`: `CREATE TABLE IF NOT EXISTS` no migra.
+_COLUMNAS_AGREGADAS = [
+    ("source_files", "bytes", "INTEGER"),
+]
 
 # El sufijo de las tablas de paso del push. Doble guion bajo para que no choque
 # con ningun nombre real ni ahora ni despues.
@@ -214,6 +224,32 @@ def pull_from_turso() -> int:
     try:
         for stmt in _SCHEMA_STMTS:
             client.execute(stmt)
+
+        # **La misma migración que el local, del lado remoto.** `_SCHEMA_STMTS` usa
+        # `CREATE TABLE IF NOT EXISTS`, así que la tabla que ya está allá NO recibe
+        # una columna nueva, y el `SELECT` de abajo la nombra: sin esto, el primer
+        # pull tras agregar `bytes` moriría con "no such column". El push sí la
+        # crearía bien, porque arma sus tablas de paso desde cero, pero el pull
+        # corre ANTES que el push.
+        #
+        # **El fallo NO se diagnostica por el texto del error, se comprueba.** El
+        # equivalente local se apoya en el "duplicate column" de `sqlite3`, que
+        # aquí no sirve: del otro lado no hay SQLite, hay libsql por HTTP, y la
+        # redacción puede venir envuelta. Si no coincidiera, el pull moriría en
+        # CADA arranque a partir del segundo. Las credenciales de Turso sólo están
+        # en los secrets del repo, así que desde esta máquina no se puede ver cómo
+        # redacta el error, y suponerlo es justo el hueco que se colo en el #31.
+        #
+        # Así que si el ALTER falla, se pregunta lo único que importa —¿está la
+        # columna?— con un SELECT, que es SQL de a pie y no depende de ninguna
+        # extensión del transporte. Si está, el ALTER sobraba; si no está, la
+        # excepción del SELECT aborta el pull en voz alta.
+        for tabla, columna, tipo in _COLUMNAS_AGREGADAS:
+            try:
+                client.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo}")
+                logger.info("migración remota: %s.%s agregada", tabla, columna)
+            except Exception:  # noqa: BLE001
+                client.execute(f"SELECT {columna} FROM {tabla} LIMIT 0")
 
         # **Una sola transacción para TODO el reemplazo.** Si algo de aquí
         # adentro truena, `get_conn()` hace rollback y el índice anterior queda

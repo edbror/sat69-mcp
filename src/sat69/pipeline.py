@@ -52,6 +52,14 @@ def _fecha(v: str | None) -> str | None:
 # ya había significa lo mismo en ambas escalas.
 MERMA_MAX = 0.10
 
+# Qué fracción de la caída de bytes esperada basta para creerle a una caída de
+# filas. Ver `_verificar_correspondencia`: con 0.30 se acepta que el archivo nuevo
+# pese hasta 70% MENOS de lo que la aritmética predice, que es holgura de sobra
+# para filas de ancho desigual, y sigue atrapando una pérdida de diez filas a
+# bytes constantes. Medido contra las tres bajas reales del 2026-11-18, los
+# ratios fueron 0.95, 1.02 y 1.13.
+CORRESPONDENCIA_MIN = 0.30
+
 MESES = {
     "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
     "julio": 7, "agosto": 8, "septiembre": 9, "setiembre": 9, "octubre": 10,
@@ -88,11 +96,96 @@ def _vigencia_iso(v: str | None) -> str | None:
     return f"{int(m.group(3)):04d}-{mes:02d}-{int(m.group(1)):02d}"
 
 
-def _verificar_frescura(src: str, rows: list[dict], vigencia: str | None) -> None:
+def _verificar_correspondencia(src: str, raw: bytes, rows: list[dict], prev: dict) -> None:
+    """Si cayeron filas, los bytes del origen tuvieron que caer con ellas.
+
+    **El hueco que esto tapa, y por qué el guard de merma no lo ve.** Todo lo
+    demás en `source_files` sale de lo que NOSOTROS parseamos: `rows` son las
+    filas insertadas, así que contrastar la tabla contra `rows` detecta un pull
+    truncado —bajó una y no la otra— pero no un PARSEO truncado, donde bajan las
+    dos juntas y siguen cuadrando. Ese es un falso negativo: `verificar_rfc`
+    contestaría LIMPIO para contribuyentes que sí están en la lista.
+
+    `MERMA_MAX` tampoco alcanza, porque es un umbral sobre el total: mil filas
+    perdidas de 264,766 son 0.38% y pasan de largo.
+
+    Los bytes del archivo son la única cifra que viene del origen, y de ahí su
+    valor: **no se mueven si el que falla somos nosotros.** Así que en vez de una
+    banda sobre bytes-por-fila, que para mover 0.38% necesitaría ser tan estrecha
+    que daría falsos positivos con cualquier cambio del SAT, se compara la
+    CORRESPONDENCIA de los deltas: si se perdieron N filas, el archivo tenía que
+    adelgazar como N filas.
+
+    Medido contra el 2026-11-18, donde el SAT sí quitó gente:
+
+        Firmes          -17 filas, -1,228 B   esperaba -1,294   ratio 0.95
+        No_localizados   -7 filas,   -591 B   esperaba   -582   ratio 1.02
+        Cancelados       -2 filas,   -253 B   esperaba   -223   ratio 1.13
+
+    y contra un parser que pierde filas sin que el archivo cambie, el ratio es
+    0.00 sin importar si perdió mil o diez.
+
+    **Lo que NO cubre, dicho como tal:** si el SAT achica las filas Y el parser se
+    come algunas, los dos efectos se cancelan y esto no lo ve. Protege contra la
+    pérdida silenciosa a formato constante, que es el caso realista.
+    """
+    prev_n, prev_b = prev["rows"] or 0, prev["bytes"]
+    if prev_b is None:
+        # Archivo importado antes de que la columna existiera. No hay línea base,
+        # así que el guard EMPIEZA a proteger en la corrida siguiente, no en ésta.
+        #
+        # Va como WARNING y no como info a propósito: un guard que todavía no
+        # vigila es justo lo que hay que saber, y en `info` se pierde entre las
+        # cien líneas de descarga del cron. Aparece una vez por archivo, en la
+        # primera corrida tras agregar la columna, y después nunca más: eso
+        # marca con precisión cuándo empezó a proteger.
+        logger.warning(
+            "%s: sin bytes previos, la correspondencia NO se evalúa esta corrida; "
+            "empieza a proteger en la siguiente", src,
+        )
+        return
+    if not prev_n or not prev_b:
+        return
+
+    perdidas = prev_n - len(rows)
+    if perdidas <= 0:
+        return  # creció o quedó igual: no es este modo de falla
+
+    ancho = prev_b / prev_n
+    esperado = perdidas * ancho
+    cayo = prev_b - len(raw)
+    if cayo >= esperado * CORRESPONDENCIA_MIN:
+        return
+
+    aviso = (
+        f"{src}: se perdieron {perdidas:,} filas pero el archivo sólo adelgazó "
+        f"{cayo:,} bytes de los ~{esperado:,.0f} que esas filas pesaban "
+        f"(ancho previo {ancho:.0f} B/fila). Si las filas desaparecieron del SAT, "
+        f"el archivo pesa menos; si pesa igual, las perdimos nosotros al parsear."
+    )
+    # Misma salida de operador que la merma, y por la misma razón: un cambio de
+    # formato del origen rompe la correspondencia de forma legítima y el código no
+    # puede saberlo. Antes de encenderla, compara los RFC: un parseo roto no trae
+    # registros nuevos.
+    if settings.permitir_merma:
+        logger.warning("%s ACEPTADO por SAT_PERMITIR_MERMA.", aviso)
+        return
+    raise ImportacionSospechosa(
+        aviso + " Se conserva lo anterior. Si el formato del archivo cambió de "
+        "verdad, corre con SAT_PERMITIR_MERMA=1."
+    )
+
+
+def _verificar_frescura(
+    src: str, rows: list[dict], vigencia: str | None, raw: bytes | None = None
+) -> None:
     """Aborta el reemplazo si el archivo nuevo es peor que el que ya está."""
     prev = db.get_source_state(src)
     if prev is None:  # primera importación: no hay nada que proteger
         return
+
+    if raw is not None:
+        _verificar_correspondencia(src, raw, rows, prev)
 
     prev_n = prev["rows"] or 0
     if prev_n and not rows:
@@ -274,9 +367,10 @@ def _import_69b(force: bool) -> dict:
 
     rows, vigencia = parse_69b(raw)
     vigencia = vigencia or modificado
-    _verificar_frescura(src, rows, vigencia)
+    _verificar_frescura(src, rows, vigencia, raw=raw)
     n = db.replace_69b(rows)
-    db.record_source("69b", src, h, n, _now(), sat_actualizado_al=vigencia)
+    db.record_source("69b", src, h, n, _now(), sat_actualizado_al=vigencia,
+                     bytes_origen=len(raw))
     return {"source_file": src, "cached": False, "rows": n, "sat_actualizado_al": vigencia}
 
 
@@ -291,9 +385,10 @@ def _import_69b_bis(force: bool) -> dict:
 
     rows, vigencia = parse_69b_bis(raw)
     vigencia = vigencia or modificado
-    _verificar_frescura(src, rows, vigencia)
+    _verificar_frescura(src, rows, vigencia, raw=raw)
     n = db.replace_69b_bis(rows)
-    db.record_source("69bbis", src, h, n, _now(), sat_actualizado_al=vigencia)
+    db.record_source("69bbis", src, h, n, _now(), sat_actualizado_al=vigencia,
+                     bytes_origen=len(raw))
     return {"source_file": src, "cached": False, "rows": n, "sat_actualizado_al": vigencia}
 
 
@@ -306,9 +401,10 @@ def _import_csd(force: bool) -> dict:
 
     rows, vigencia = parse_csd(raw)
     vigencia = vigencia or modificado  # el CSD no trae nota: su vigencia es el Last-Modified
-    _verificar_frescura(src, rows, vigencia)
+    _verificar_frescura(src, rows, vigencia, raw=raw)
     n = db.replace_csd(rows)
-    db.record_source("csd", src, h, n, _now(), sat_actualizado_al=vigencia)
+    db.record_source("csd", src, h, n, _now(), sat_actualizado_al=vigencia,
+                     bytes_origen=len(raw))
     return {"source_file": src, "cached": False, "rows": n, "sat_actualizado_al": vigencia}
 
 
@@ -320,9 +416,10 @@ def _import_69_file(fname: str, force: bool) -> dict:
         return {"source_file": fname, "cached": True, "rows": None}
 
     rows = parse_69(raw, fname)
-    _verificar_frescura(fname, rows, modificado)
+    _verificar_frescura(fname, rows, modificado, raw=raw)
     n = db.replace_69_file(fname, rows)
-    db.record_source("69", fname, h, n, _now(), sat_actualizado_al=modificado)
+    db.record_source("69", fname, h, n, _now(), sat_actualizado_al=modificado,
+                     bytes_origen=len(raw))
     return {"source_file": fname, "cached": False, "rows": n, "sat_actualizado_al": modificado}
 
 

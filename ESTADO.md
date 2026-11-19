@@ -57,7 +57,7 @@ importación fallida.
 
 ## Qué lo bloquea
 
-Nada. Las dos cosas que estaban anotadas aquí se cerraron entre el 16 y el 18-nov-2026 y
+Nada. Las tres cosas que estaban anotadas aquí se cerraron entre el 16 y el 18-nov-2026 y
 se quedan escritas con su medición, porque el por qué de cada decisión es lo que
 evita que alguien la deshaga.
 
@@ -171,6 +171,93 @@ El historial de por qué esto importa: el 18-oct el servicio importó 15,024 de
 557,094 filas y pasó el día contestando con el 2.7% de la lista del Art. 69, sin
 que nada avisara, porque `pull_from_turso` devolvía el total parcial en vez de
 levantar. Ese modo de falla ahora tiene su test.
+
+**3. Una pérdida silenciosa al parsear ya no pasa de largo.**
+
+*Cerrado el 2026-11-18 (WE-1301).* Investigar por qué el Art. 69 bajó 26 filas
+destapó que ninguno de los dos candados que había puede ver el peor modo de
+falla: que el parser se coma filas. `listas_incompletas()` contrasta la tabla
+contra lo declarado, y las dos cifras salen de lo que NOSOTROS parseamos, así que
+bajan juntas y siguen cuadrando. Y `MERMA_MAX` es un umbral sobre el total: mil
+filas perdidas de 264,766 son 0.38% y pasan de largo. El precio del falso
+negativo es el caro: `verificar_rfc` contesta LIMPIO para quien sí está en la
+lista.
+
+Los bytes del archivo del SAT son la única cifra de `source_files` que **no**
+sale de nuestro parseo, y de ahí su valor: no se mueven cuando el que falla somos
+nosotros. Lo que se guarda es `source_files.bytes`, y lo que se compara es la
+correspondencia de los deltas: si se perdieron N filas, el archivo tenía que
+adelgazar como N filas.
+
+Se descartó la "banda de bytes por fila" que proponía el issue, por medición: una
+pérdida de mil filas mueve el promedio 0.38%, así que la banda tendría que ser
+tan estrecha que cualquier cambio del SAT la rompería. El delta sí separa los dos
+casos con holgura:
+
+| | filas | bytes | esperado | ratio |
+|---|---|---|---|---|
+| Firmes, baja real del 18-nov | −17 | −1,228 | −1,294 | **0.95** |
+| No_localizados, baja real | −7 | −591 | −582 | **1.02** |
+| Cancelados, baja real | −2 | −253 | −223 | **1.13** |
+| parser que se come filas | −10 a −50,000 | 0 | −761 a −3.8 M | **0.00** |
+
+`CORRESPONDENCIA_MIN = 0.30`: 3x de margen contra el caso real más apretado y 0.30
+de distancia al modo de falla, que da 0.00 sin importar la magnitud.
+
+**Lo que NO cubre, dicho como tal:** si el SAT achica las filas Y el parser se
+come algunas, los dos efectos se cancelan y esto no lo ve. Protege contra la
+pérdida silenciosa a formato constante, que es el caso realista.
+
+Y **no protege en su primera corrida**: los archivos importados antes de que la
+columna existiera tienen `bytes` en NULL, no hay línea base, y el guard lo dice
+en el log como WARNING —no como info, donde se perdería entre las cien líneas de
+descarga del cron— y empieza a vigilar en la corrida siguiente. Esa línea marca
+con precisión el día que empezó a proteger.
+
+Catorce pruebas en `tests/test_correspondencia_bytes.py`, y lo que les da valor
+es haberlas visto en rojo. Siete sabotajes, cada uno por su propia razón:
+
+| sabotaje | resultado |
+|---|---|
+| el guard no se llama desde `_verificar_frescura` | rojo: `test_el_guard_esta_cableado_a_la_importacion` |
+| `record_source` sin los bytes (el cable cortado) | rojo: el cableado, 2 pruebas |
+| el dict de `get_source_state` sin `bytes` | rojo: el cableado, 2 pruebas |
+| umbral tan flojo que no atrapa nada | rojo: las 7 que exigen que atrape |
+| umbral tan estricto que reprueba al SAT real | rojo: 2 de las 3 bajas reales |
+| UNA de las cuatro rutas sin `raw=raw` | rojo: el recorrido del AST |
+| UNA de las cuatro rutas sin `bytes_origen` | rojo: el recorrido del AST |
+
+Los dos últimos existen porque `raw` es **opcional** en `_verificar_frescura` —lo
+es porque los otros dos candados no lo necesitan y dieciocho pruebas los
+ejercitan con tres argumentos—, y una ruta de importación que olvide pasarlo
+apaga la correspondencia **sólo para ese archivo**, en silencio y en verde. El
+test recorre el AST en vez de grepear: el código dice quién pasa los bytes, no
+una línea que partida en dos deja mentir al grep.
+
+**El primer sabotaje salió VERDE y el candado estaba inservible**: los doce tests
+que había llamaban a `_verificar_correspondencia` a mano, así que borrar la línea
+que lo invoca no rompía ninguno. De ahí salió el test trece, que entra por
+`_import_csd` como entra el cron y pierde UNA fila de 300 —0.33%, por debajo de
+`MERMA_MAX`—, con lo cual el único candado que puede verlo es éste.
+
+**Y la medición del sabotaje también mintió.** Cambiar `0.30` por `1.10` no
+cambia el tamaño del archivo, y Python invalida el `.pyc` por (mtime, tamaño); el
+`cp` de restauración cayó en el mismo segundo y el intérprete siguió ejecutando
+el bytecode saboteado durante tres corridas "limpias" que salieron rojas. El
+arnés ahora borra `__pycache__` entre pasos. Segunda vez en este repo que la
+regla aplica: un candado no vale hasta verlo fallar, y la forma de medir el
+sabotaje se equivoca igual que el código.
+
+*Del lado de Turso*, la columna entra en `_TABLES` y en `_COLUMNAS_DDL` —si se
+agrega al esquema local y no a esas dos listas, el push no la manda y el pull la
+deja en NULL en cada arranque, con lo cual el guard nunca tendría línea base y
+callaría para siempre—, y el pull hace el `ALTER TABLE` remoto antes de su
+`SELECT`, porque `CREATE TABLE IF NOT EXISTS` no migra la tabla que ya está allá
+y el pull corre antes que el push. Si ese ALTER falla, **no se diagnostica por el
+texto del error**: se comprueba con un `SELECT` de la columna. Del otro lado no
+hay SQLite sino libsql por HTTP, las credenciales sólo viven en los secrets del
+repo, y suponer la redacción de un error que no se puede ver desde esta máquina
+es exactamente el hueco que se colo en el #31.
 
 ## Cómo volver a medir esto
 
